@@ -1,9 +1,39 @@
 const express = require('express');
+const crypto = require('crypto');
+const fs = require('fs');
 const http = require('http');
+const https = require('https');
+const path = require('path');
 const { Server } = require('socket.io');
 
 const app = express();
-const server = http.createServer(app);
+
+const HTTPS_ENABLED = /^(1|true|yes)$/i.test(process.env.HTTPS || process.env.USE_HTTPS || '');
+const SSL_CERT_FILE = process.env.SSL_CERT_FILE || path.join(__dirname, '.cert', 'localhost.crt');
+const SSL_KEY_FILE = process.env.SSL_KEY_FILE || path.join(__dirname, '.cert', 'localhost.key');
+
+let protocol = 'http';
+let server;
+
+if (HTTPS_ENABLED) {
+  try {
+    if (!fs.existsSync(SSL_CERT_FILE) || !fs.existsSync(SSL_KEY_FILE)) {
+      throw new Error(`HTTPS certificate files not found: ${SSL_CERT_FILE}, ${SSL_KEY_FILE}`);
+    }
+
+    server = https.createServer({
+      cert: fs.readFileSync(SSL_CERT_FILE),
+      key: fs.readFileSync(SSL_KEY_FILE)
+    }, app);
+    protocol = 'https';
+  } catch (err) {
+    console.warn(`HTTPS unavailable, falling back to HTTP: ${err.message}`);
+  }
+}
+
+if (!server) {
+  server = http.createServer(app);
+}
 const io = new Server(server, {
   cors: { origin: "*" },
   pingTimeout: 60000,
@@ -30,6 +60,10 @@ function generateRoomId() {
   return id;
 }
 
+function createReconnectToken() {
+  return crypto.randomBytes(16).toString('hex');
+}
+
 function createRoom(roomName) {
   const roomId = generateRoomId();
   rooms[roomId] = {
@@ -37,6 +71,7 @@ function createRoom(roomName) {
     name: roomName || '房间' + roomId,
     hostId: null,
     players: [],
+    playerTokens: {},
     disconnectedPlayers: {},
     gameState: 'waiting',
     currentDrawerIndex: 0,
@@ -75,6 +110,8 @@ setInterval(() => {
       if (now - room.disconnectedPlayers[id].disconnectTime > 5 * 60 * 1000) {
         delete room.disconnectedPlayers[id];
         delete room.scores[id];
+        delete room.spectatorCorrectCounts[id];
+        delete room.playerTokens[id];
         room.players = room.players.filter(p => p.id !== id);
         changed = true;
       }
@@ -286,6 +323,12 @@ function endGame(room) {
     .sort((a, b) => b.correctCount - a.correctCount);
 
   io.to(room.id).emit('gameEnd', { rankings: playerRankings, spectatorRankings });
+  for (const id in room.disconnectedPlayers) {
+    delete room.scores[id];
+    delete room.spectatorCorrectCounts[id];
+    delete room.playerTokens[id];
+    room.players = room.players.filter(p => p.id !== id);
+  }
   room.disconnectedPlayers = {};
   
   io.emit('roomListUpdate', getRoomListForBroadcast());
@@ -329,17 +372,20 @@ function removePlayerFromRoom(socket, room, isDisconnect = false) {
   const player = room.players[idx];
   if (isDisconnect) {
     room.disconnectedPlayers[socket.id] = {
-      player, oldScores: room.scores[socket.id],
+      player,
+      oldScores: room.scores[socket.id],
+      oldSpectatorCorrectCount: room.spectatorCorrectCounts[socket.id],
+      reconnectToken: room.playerTokens[socket.id],
       canvasHistory: [...room.canvasHistory], disconnectTime: Date.now()
     };
     if (room.gameState === 'playing' && room.players[room.currentDrawerIndex]?.id === socket.id) {
-      io.to(room.id).emit('chat', { name: '系统', message: `画手 ${player.name} 断线了，本轮提前结束`, isSystem: true });
-      endTurn(room);
+      io.to(room.id).emit('chat', { name: '系统', message: `画手 ${player.name} 断线了，等待重连中，本轮计时继续`, isSystem: true });
     }
   } else {
     room.players.splice(idx, 1);
     delete room.scores[socket.id];
     delete room.spectatorCorrectCounts[socket.id];
+    delete room.playerTokens[socket.id];
     if (room.hostId === socket.id) {
       room.hostId = null;
       getHostId(room);
@@ -358,25 +404,67 @@ function removePlayerFromRoom(socket, room, isDisconnect = false) {
 io.on('connection', (socket) => {
   console.log('用户连接:', socket.id);
 
-  socket.on('reconnectAttempt', (roomId, oldId) => {
+  socket.on('reconnectAttempt', (payload, legacyOldId) => {
+    const isPayloadObject = payload && typeof payload === 'object';
+    const roomId = isPayloadObject ? payload.roomId : payload;
+    const oldId = isPayloadObject ? payload.playerId : legacyOldId;
+    const reconnectToken = isPayloadObject ? payload.reconnectToken : null;
     const room = rooms[roomId];
-    if (!room) return;
-    if (room.disconnectedPlayers[oldId]) {
-      const { player, oldScores, canvasHistory: savedCanvas } = room.disconnectedPlayers[oldId];
+    if (!room) {
+      socket.emit('reconnectFailed', { reason: 'roomNotFound', message: '房间不存在或已结束' });
+      return;
+    }
+
+    const disconnected = room.disconnectedPlayers[oldId];
+    if (!disconnected) {
+      socket.emit('reconnectFailed', { reason: 'playerNotFound', message: '未找到可恢复的断线玩家' });
+      return;
+    }
+
+    if (!reconnectToken || disconnected.reconnectToken !== reconnectToken) {
+      socket.emit('reconnectFailed', { reason: 'tokenMismatch', message: '重连凭证无效' });
+      return;
+    }
+
+    if (disconnected) {
+      const { player, oldScores, oldSpectatorCorrectCount } = disconnected;
       delete room.disconnectedPlayers[oldId];
 
       const playerIndex = room.players.findIndex(p => p.id === oldId);
-      if (playerIndex !== -1) room.players[playerIndex].id = socket.id;
+      if (playerIndex === -1) {
+        socket.emit('reconnectFailed', { reason: 'playerNotFound', message: '玩家已被移出房间' });
+        return;
+      }
 
-      if (!player.isSpectator) room.scores[socket.id] = oldScores;
+      room.players[playerIndex].id = socket.id;
+      if (room.hostId === oldId) room.hostId = socket.id;
+
+      if (!player.isSpectator) room.scores[socket.id] = oldScores || 0;
       delete room.scores[oldId];
+      if (player.isSpectator) room.spectatorCorrectCounts[socket.id] = oldSpectatorCorrectCount || 0;
+      delete room.spectatorCorrectCounts[oldId];
+
+      if (room.guessedPlayers.includes(oldId)) {
+        room.guessedPlayers = room.guessedPlayers.map(id => id === oldId ? socket.id : id);
+      }
+      if (room.currentSpectatorGuessed.has(oldId)) {
+        room.currentSpectatorGuessed.delete(oldId);
+        room.currentSpectatorGuessed.add(socket.id);
+      }
+
+      const newReconnectToken = createReconnectToken();
+      room.playerTokens[socket.id] = newReconnectToken;
+      delete room.playerTokens[oldId];
 
       socket.join(roomId);
       if (player.isSpectator) socket.join(roomId + ':spectators');
 
       io.to(roomId).emit('playerReconnected', {
         oldId, newPlayer: room.players[playerIndex],
-        scores: room.scores, hostId: getHostId(room)
+        players: room.players.filter(p => !room.disconnectedPlayers[p.id]),
+        scores: room.scores,
+        hostId: getHostId(room),
+        isCurrentDrawer: playerIndex === room.currentDrawerIndex
       });
 
       socket.emit('reconnectSuccess', {
@@ -397,7 +485,8 @@ io.on('connection', (socket) => {
         hasCustomWords: room.customWords.length > 0,
         wordCount: room.customWords.length,
         canvasHistory: room.canvasHistory,
-        roomId: room.id
+        roomId: room.id,
+        reconnectToken: newReconnectToken
       });
     }
   });
@@ -409,16 +498,20 @@ io.on('connection', (socket) => {
     if (oldRoom) removePlayerFromRoom(socket, oldRoom, false);
 
     const roomId = createRoom(roomName);
+    const reconnectToken = createReconnectToken();
     const player = { id: socket.id, name: playerName, isSpectator: false };
     rooms[roomId].players.push(player);
     rooms[roomId].hostId = socket.id;
     rooms[roomId].scores[socket.id] = 0;
+    rooms[roomId].playerTokens[socket.id] = reconnectToken;
     socket.join(roomId);
 
     socket.emit('roomJoined', {
       roomId, roomName: rooms[roomId].name, isHost: true, player,
-      players: rooms[roomId].players, hostId: socket.id, hasCustomWords: false, wordCount: 0
+      players: rooms[roomId].players, hostId: socket.id, hasCustomWords: false, wordCount: 0,
+      reconnectToken
     });
+    socket.emit('reconnectInfo', { roomId, playerId: socket.id, reconnectToken });
     io.emit('roomListUpdate', getRoomListForBroadcast());
   });
 
@@ -429,7 +522,7 @@ io.on('connection', (socket) => {
       return;
     }
 
-    const existing = room.players.find(p => !room.disconnectedPlayers[p.id] && p.name === playerName);
+    const existing = room.players.find(p => p.name === playerName);
     if (existing) {
       socket.emit('errorMessage', { type: 'nameConflict', message: `房间内已有玩家叫“${playerName}”，请修改昵称` });
       return;
@@ -451,9 +544,11 @@ io.on('connection', (socket) => {
     }
 
     const player = { id: socket.id, name: playerName, isSpectator: asSpectator };
+    const reconnectToken = createReconnectToken();
     room.players.push(player);
     if (!asSpectator) room.scores[socket.id] = 0;
     else room.spectatorCorrectCounts[socket.id] = 0;
+    room.playerTokens[socket.id] = reconnectToken;
 
     socket.join(roomId);
     if (asSpectator) socket.join(roomId + ':spectators');
@@ -474,8 +569,10 @@ io.on('connection', (socket) => {
       isHost: getHostId(room) === socket.id,
       hasCustomWords: room.customWords.length > 0,
       wordCount: room.customWords.length,
-      roomId: room.id
+      roomId: room.id,
+      reconnectToken
     });
+    socket.emit('reconnectInfo', { roomId: room.id, playerId: socket.id, reconnectToken });
 
     if (room.gameState === 'playing' || room.gameState === 'selectingWord') {
       socket.emit('gameInProgress', {
@@ -711,4 +808,6 @@ io.on('connection', (socket) => {
 });
 
 const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => console.log(`服务器运行在 http://localhost:${PORT}`));
+const HOST = process.env.HOST || '127.0.0.1';
+const displayHost = HOST === '127.0.0.1' ? 'localhost' : HOST;
+server.listen(PORT, HOST, () => console.log(`服务器运行在 ${protocol}://${displayHost}:${PORT}`));
