@@ -48,13 +48,18 @@
 ```bash
 git clone https://github.com/你的用户名/DrawGuessRoom.git
 cd DrawGuessRoom
+```
+
 ### 2. 安装依赖
-bash
+``` bash
 npm install
+```
 ### 3. 启动服务器
-bash
+```bash
 node server.js
+```
 服务器默认运行在 http://localhost:3000
 
 ### 4. 开始游戏
-用浏览器打开 http://localhost:3000，输入昵称即可创建或加入房间，邀请朋友一起玩！
+用浏览器打开 http://localhost:3000
+输入昵称即可创建或加入房间，邀请朋友一起玩！
