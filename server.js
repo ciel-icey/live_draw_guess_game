@@ -1,0 +1,714 @@
+const express = require('express');
+const http = require('http');
+const { Server } = require('socket.io');
+
+const app = express();
+const server = http.createServer(app);
+const io = new Server(server, {
+  cors: { origin: "*" },
+  pingTimeout: 60000,
+  pingInterval: 25000
+});
+
+app.use(express.static('public'));
+app.use(express.json({ limit: '1mb' }));
+
+const MAX_PLAYERS = 20;
+const MAX_SPECTATORS = 30;
+
+const defaultWords = ['苹果', '香蕉', '猫', '狗', '太阳', '月亮', '星星', '电脑', '手机', '书本',
+  '汽车', '飞机', '房子', '树', '花', '鱼', '鸟', '蛋糕', '冰淇淋', '篮球', '足球', '雨伞',
+  '眼镜', '手表', '书包', '铅笔', '橡皮', '桌子', '椅子', '电视', '冰箱', '空调', '洗衣机',
+  '吉他', '钢琴', '小提琴', '跑步', '游泳', '跳舞', '唱歌', '画画', '吃饭', '睡觉', '喝水'];
+
+const rooms = {};
+
+function generateRoomId() {
+  let id;
+  do { id = Math.random().toString(36).substring(2, 8).toUpperCase(); }
+  while (rooms[id]);
+  return id;
+}
+
+function createRoom(roomName) {
+  const roomId = generateRoomId();
+  rooms[roomId] = {
+    id: roomId,
+    name: roomName || '房间' + roomId,
+    hostId: null,
+    players: [],
+    disconnectedPlayers: {},
+    gameState: 'waiting',
+    currentDrawerIndex: 0,
+    currentWord: '',
+    currentRound: 1,
+    timer: 60,
+    timerInterval: null,
+    scores: {},
+    guessedPlayers: [],
+    canvasHistory: [],
+    gameSettings: { drawTime: 60, selectWordTime: 15, totalRounds: 3 },
+    customWords: [],
+    spectatorCorrectCounts: {},
+    currentSpectatorGuessed: new Set()
+  };
+  return roomId;
+}
+
+function getRoomBySocket(socket) {
+  for (const roomId in rooms) {
+    if (rooms[roomId].players.some(p => p.id === socket.id)) {
+      return rooms[roomId];
+    }
+  }
+  return null;
+}
+
+// 定期清理空房间和超时断线玩家
+setInterval(() => {
+  const now = Date.now();
+  for (const roomId in rooms) {
+    const room = rooms[roomId];
+    let changed = false;
+
+    for (const id in room.disconnectedPlayers) {
+      if (now - room.disconnectedPlayers[id].disconnectTime > 5 * 60 * 1000) {
+        delete room.disconnectedPlayers[id];
+        delete room.scores[id];
+        room.players = room.players.filter(p => p.id !== id);
+        changed = true;
+      }
+    }
+
+    const hasOnlinePlayer = room.players.some(p => !room.disconnectedPlayers[p.id]);
+    if (!hasOnlinePlayer) {
+      delete rooms[roomId];
+      continue;
+    }
+
+    if (changed) {
+      io.to(roomId).emit('playerLeft', {
+        hostId: getHostId(room),
+        players: room.players.filter(p => !room.disconnectedPlayers[p.id])
+      });
+      io.emit('roomListUpdate', getRoomListForBroadcast());
+    }
+  }
+}, 60000);
+
+function getActivePlayers(room) {
+  return room.players.filter(p => !p.isSpectator && !room.disconnectedPlayers[p.id]);
+}
+
+function getHostId(room) {
+  const active = getActivePlayers(room);
+  if (room.hostId && active.some(p => p.id === room.hostId)) return room.hostId;
+  room.hostId = active.length > 0 ? active[0].id : null;
+  return room.hostId;
+}
+
+function getRandomWords(room, count) {
+  const list = room.customWords.length > 0 ? room.customWords : defaultWords;
+  const shuffled = [...list].sort(() => 0.5 - Math.random());
+  return shuffled.slice(0, Math.min(count, shuffled.length));
+}
+
+// 规范化答案：去除所有空格并转小写
+function normalizeAnswer(text) {
+  return text.replace(/\s+/g, '').toLowerCase();
+}
+
+// 检查答案是否匹配当前词（支持别名）
+function isWordMatched(message, currentWord) {
+  const normalizedMsg = normalizeAnswer(message);
+  const aliases = currentWord.split('/');
+  return aliases.some(alias => normalizeAnswer(alias) === normalizedMsg);
+}
+
+// ========== 游戏流程 ==========
+function startGame(room, socket) {
+  if (room.gameState === 'finished') return;
+  const active = getActivePlayers(room);
+  
+  if (active.length < 2) {
+    if (socket) {
+      socket.emit('errorMessage', '人数不足！至少需要 2 名非观战玩家才能开始游戏。');
+    }
+    return;
+  }
+
+  room.gameState = 'selectingWord';
+  room.currentRound = 1;
+  room.currentDrawerIndex = 0;
+  room.scores = {};
+  room.canvasHistory = [];
+  room.spectatorCorrectCounts = {};
+  active.forEach(p => room.scores[p.id] = 0);
+
+  io.to(room.id).emit('gameStarted', {
+    settings: room.gameSettings, players: room.players, scores: room.scores, hostId: getHostId(room)
+  });
+  
+  io.emit('roomListUpdate', getRoomListForBroadcast());
+  
+  setTimeout(() => startWordSelection(room), 2000);
+}
+
+function startWordSelection(room) {
+  if (room.gameState === 'finished') return;
+  if (room.currentRound > room.gameSettings.totalRounds) {
+    endGame(room);
+    return;
+  }
+
+  while (room.currentDrawerIndex < room.players.length &&
+    (room.disconnectedPlayers[room.players[room.currentDrawerIndex].id] ||
+      room.players[room.currentDrawerIndex].isSpectator)) {
+    room.currentDrawerIndex++;
+  }
+
+  if (room.currentDrawerIndex >= room.players.length) {
+    room.currentDrawerIndex = 0;
+    room.currentRound++;
+    setTimeout(() => startWordSelection(room), 1000);
+    return;
+  }
+
+  const drawer = room.players[room.currentDrawerIndex];
+  const wordOptions = getRandomWords(room, 4);
+
+  room.timer = room.gameSettings.selectWordTime;
+  room.gameState = 'selectingWord';
+  room.canvasHistory = [];
+
+  io.to(room.id).emit('wordSelectionStart', {
+    round: room.currentRound,
+    totalRounds: room.gameSettings.totalRounds,
+    drawerId: drawer.id,
+    drawerName: drawer.name,
+    currentTimer: room.timer
+  });
+
+  // 发送给画手时，只显示每个词的主名称（第一个/之前的部分）
+  const wordChoices = wordOptions.map(full => ({
+    display: full.includes('/') ? full.split('/')[0] : full,
+    full
+  }));
+  io.to(drawer.id).emit('wordOptions', wordChoices);
+
+  clearInterval(room.timerInterval);
+  room.timerInterval = setInterval(() => {
+    if (room.gameState === 'finished') return;
+    room.timer--;
+    io.to(room.id).emit('timerUpdate', room.timer);
+    if (room.timer <= 0) {
+      selectWord(room, wordOptions[0]);
+    }
+  }, 1000);
+}
+
+function selectWord(room, word) {
+  if (room.gameState === 'finished') return;
+  clearInterval(room.timerInterval);
+  room.currentWord = word;
+  room.timer = room.gameSettings.drawTime;
+  room.gameState = 'playing';
+  room.guessedPlayers = [];
+  room.currentSpectatorGuessed = new Set();
+
+  const drawerId = room.players[room.currentDrawerIndex].id;
+  const drawerName = room.players[room.currentDrawerIndex].name;
+
+  room.players.forEach(p => {
+    if (room.disconnectedPlayers[p.id]) return;
+    if (p.id === drawerId) {
+      io.to(p.id).emit('roundStart', {
+        round: room.currentRound, totalRounds: room.gameSettings.totalRounds,
+        drawerId, drawerName, word: room.currentWord,
+        isDrawer: true, isSpectator: false, currentTimer: room.timer, canvasHistory: room.canvasHistory
+      });
+    } else {
+      io.to(p.id).emit('roundStart', {
+        round: room.currentRound, totalRounds: room.gameSettings.totalRounds,
+        drawerId, drawerName, word: '',
+        isDrawer: false, isSpectator: p.isSpectator, currentTimer: room.timer, canvasHistory: room.canvasHistory
+      });
+    }
+  });
+
+  room.timerInterval = setInterval(() => {
+    if (room.gameState === 'finished') return;
+    room.timer--;
+    io.to(room.id).emit('timerUpdate', room.timer);
+    if (room.timer <= 0) {
+      endTurn(room);
+    }
+  }, 1000);
+}
+
+function endTurn(room) {
+  if (room.gameState === 'finished') return;
+  clearInterval(room.timerInterval);
+
+  const drawer = room.players[room.currentDrawerIndex];
+  const n = room.guessedPlayers.length;
+  const drawerScore = n * (n + 1) / 2;
+  if (drawer && room.scores[drawer.id] !== undefined) {
+    room.scores[drawer.id] += drawerScore;
+  }
+
+  io.to(room.id).emit('turnEnd', {
+    word: room.currentWord, guessedPlayers: room.guessedPlayers,
+    drawerScore, scores: room.scores
+  });
+
+  room.currentDrawerIndex++;
+  if (room.currentDrawerIndex >= room.players.length) {
+    room.currentDrawerIndex = 0;
+    room.currentRound++;
+  }
+  setTimeout(() => startWordSelection(room), 4000);
+}
+
+function endGame(room) {
+  clearInterval(room.timerInterval);
+  room.gameState = 'finished';
+
+  const onlinePlayers = room.players.filter(p => !room.disconnectedPlayers[p.id]);
+  const playerRankings = onlinePlayers
+    .filter(p => !p.isSpectator)
+    .map(p => ({ id: p.id, name: p.name, score: room.scores[p.id] || 0 }))
+    .sort((a, b) => b.score - a.score);
+
+  const spectatorRankings = onlinePlayers
+    .filter(p => p.isSpectator)
+    .map(p => ({ id: p.id, name: p.name, correctCount: room.spectatorCorrectCounts[p.id] || 0 }))
+    .sort((a, b) => b.correctCount - a.correctCount);
+
+  io.to(room.id).emit('gameEnd', { rankings: playerRankings, spectatorRankings });
+  room.disconnectedPlayers = {};
+  
+  io.emit('roomListUpdate', getRoomListForBroadcast());
+}
+
+function restartGame(room) {
+  room.gameState = 'waiting';
+  clearInterval(room.timerInterval);
+  room.currentRound = 1;
+  room.currentDrawerIndex = 0;
+  room.scores = {};
+  room.canvasHistory = [];
+  room.spectatorCorrectCounts = {};
+  getActivePlayers(room).forEach(p => room.scores[p.id] = 0);
+
+  io.to(room.id).emit('gameRestarted', {
+    players: room.players,
+    settings: room.gameSettings,
+    hostId: getHostId(room),
+    hasCustomWords: room.customWords.length > 0,
+    wordCount: room.customWords.length
+  });
+  
+  io.emit('roomListUpdate', getRoomListForBroadcast());
+}
+
+function getRoomListForBroadcast() {
+  return Object.values(rooms).map(room => ({
+    id: room.id, name: room.name,
+    playerCount: room.players.filter(p => !p.isSpectator && !room.disconnectedPlayers[p.id]).length,
+    spectatorCount: room.players.filter(p => p.isSpectator && !room.disconnectedPlayers[p.id]).length,
+    gameState: room.gameState
+  }));
+}
+
+// 移除玩家
+function removePlayerFromRoom(socket, room, isDisconnect = false) {
+  const idx = room.players.findIndex(p => p.id === socket.id);
+  if (idx === -1) return;
+
+  const player = room.players[idx];
+  if (isDisconnect) {
+    room.disconnectedPlayers[socket.id] = {
+      player, oldScores: room.scores[socket.id],
+      canvasHistory: [...room.canvasHistory], disconnectTime: Date.now()
+    };
+    if (room.gameState === 'playing' && room.players[room.currentDrawerIndex]?.id === socket.id) {
+      io.to(room.id).emit('chat', { name: '系统', message: `画手 ${player.name} 断线了，本轮提前结束`, isSystem: true });
+      endTurn(room);
+    }
+  } else {
+    room.players.splice(idx, 1);
+    delete room.scores[socket.id];
+    delete room.spectatorCorrectCounts[socket.id];
+    if (room.hostId === socket.id) {
+      room.hostId = null;
+      getHostId(room);
+    }
+  }
+
+  io.to(room.id).emit('playerLeft', {
+    playerId: socket.id,
+    players: room.players.filter(p => !room.disconnectedPlayers[p.id]),
+    hostId: getHostId(room)
+  });
+  io.emit('roomListUpdate', getRoomListForBroadcast());
+}
+
+// ===================== Socket 事件 =====================
+io.on('connection', (socket) => {
+  console.log('用户连接:', socket.id);
+
+  socket.on('reconnectAttempt', (roomId, oldId) => {
+    const room = rooms[roomId];
+    if (!room) return;
+    if (room.disconnectedPlayers[oldId]) {
+      const { player, oldScores, canvasHistory: savedCanvas } = room.disconnectedPlayers[oldId];
+      delete room.disconnectedPlayers[oldId];
+
+      const playerIndex = room.players.findIndex(p => p.id === oldId);
+      if (playerIndex !== -1) room.players[playerIndex].id = socket.id;
+
+      if (!player.isSpectator) room.scores[socket.id] = oldScores;
+      delete room.scores[oldId];
+
+      socket.join(roomId);
+      if (player.isSpectator) socket.join(roomId + ':spectators');
+
+      io.to(roomId).emit('playerReconnected', {
+        oldId, newPlayer: room.players[playerIndex],
+        scores: room.scores, hostId: getHostId(room)
+      });
+
+      socket.emit('reconnectSuccess', {
+        player: room.players[playerIndex],
+        gameState: room.gameState,
+        players: room.players.filter(p => !room.disconnectedPlayers[p.id]),
+        settings: room.gameSettings,
+        scores: room.scores,
+        isHost: getHostId(room) === socket.id,
+        currentRound: room.currentRound,
+        totalRounds: room.gameSettings.totalRounds,
+        currentDrawer: room.players[room.currentDrawerIndex]?.name || '',
+        currentDrawerId: room.players[room.currentDrawerIndex]?.id || '',
+        currentWord: (room.gameState === 'playing' && room.players[room.currentDrawerIndex]?.id === socket.id) ? room.currentWord : '',
+        currentTimer: room.timer,
+        isDrawer: room.players[room.currentDrawerIndex]?.id === socket.id,
+        isSpectator: player.isSpectator,
+        hasCustomWords: room.customWords.length > 0,
+        wordCount: room.customWords.length,
+        canvasHistory: room.canvasHistory,
+        roomId: room.id
+      });
+    }
+  });
+
+  socket.on('getRoomList', () => socket.emit('roomList', getRoomListForBroadcast()));
+
+  socket.on('createRoom', (roomName, playerName) => {
+    const oldRoom = getRoomBySocket(socket);
+    if (oldRoom) removePlayerFromRoom(socket, oldRoom, false);
+
+    const roomId = createRoom(roomName);
+    const player = { id: socket.id, name: playerName, isSpectator: false };
+    rooms[roomId].players.push(player);
+    rooms[roomId].hostId = socket.id;
+    rooms[roomId].scores[socket.id] = 0;
+    socket.join(roomId);
+
+    socket.emit('roomJoined', {
+      roomId, roomName: rooms[roomId].name, isHost: true, player,
+      players: rooms[roomId].players, hostId: socket.id, hasCustomWords: false, wordCount: 0
+    });
+    io.emit('roomListUpdate', getRoomListForBroadcast());
+  });
+
+  socket.on('joinRoom', (roomId, playerName, asSpectator = false) => {
+    const room = rooms[roomId];
+    if (!room) {
+      socket.emit('errorMessage', { type: 'notFound', message: '房间不存在' });
+      return;
+    }
+
+    const existing = room.players.find(p => !room.disconnectedPlayers[p.id] && p.name === playerName);
+    if (existing) {
+      socket.emit('errorMessage', { type: 'nameConflict', message: `房间内已有玩家叫“${playerName}”，请修改昵称` });
+      return;
+    }
+
+    const oldRoom = getRoomBySocket(socket);
+    if (oldRoom && oldRoom.id !== roomId) {
+      removePlayerFromRoom(socket, oldRoom, false);
+    }
+
+    if (room.gameState !== 'waiting' || asSpectator) asSpectator = true;
+    else if (getActivePlayers(room).length >= MAX_PLAYERS) {
+      asSpectator = true;
+      socket.emit('chat', { name: '系统', message: '玩家已满，自动转为观战', isSystem: true });
+    }
+    if (asSpectator && room.players.filter(p => p.isSpectator && !room.disconnectedPlayers[p.id]).length >= MAX_SPECTATORS) {
+      socket.emit('errorMessage', { type: 'full', message: '观众人数已满' });
+      return;
+    }
+
+    const player = { id: socket.id, name: playerName, isSpectator: asSpectator };
+    room.players.push(player);
+    if (!asSpectator) room.scores[socket.id] = 0;
+    else room.spectatorCorrectCounts[socket.id] = 0;
+
+    socket.join(roomId);
+    if (asSpectator) socket.join(roomId + ':spectators');
+    getHostId(room);
+
+    const eventName = asSpectator ? 'spectatorJoined' : 'playerJoined';
+    io.to(roomId).emit(eventName, {
+      player,
+      players: room.players.filter(p => !room.disconnectedPlayers[p.id]),
+      hostId: getHostId(room),
+      ...(asSpectator ? {} : { hasCustomWords: room.customWords.length > 0, wordCount: room.customWords.length })
+    });
+
+    socket.emit('stateUpdate', {
+      gameState: room.gameState,
+      players: room.players.filter(p => !room.disconnectedPlayers[p.id]),
+      settings: room.gameSettings,
+      isHost: getHostId(room) === socket.id,
+      hasCustomWords: room.customWords.length > 0,
+      wordCount: room.customWords.length,
+      roomId: room.id
+    });
+
+    if (room.gameState === 'playing' || room.gameState === 'selectingWord') {
+      socket.emit('gameInProgress', {
+        gameState: room.gameState,
+        currentRound: room.currentRound,
+        totalRounds: room.gameSettings.totalRounds,
+        currentDrawer: room.players[room.currentDrawerIndex]?.name || '',
+        currentDrawerId: room.players[room.currentDrawerIndex]?.id || '',
+        currentTimer: room.timer,
+        canvasHistory: room.canvasHistory,
+        isSpectator: asSpectator
+      });
+    }
+
+    io.emit('roomListUpdate', getRoomListForBroadcast());
+  });
+
+  socket.on('leaveRoom', () => {
+    const room = getRoomBySocket(socket);
+    if (room) removePlayerFromRoom(socket, room, false);
+  });
+
+  socket.on('switchToSpectator', () => {
+    const room = getRoomBySocket(socket);
+    if (!room) return;
+    const idx = room.players.findIndex(p => p.id === socket.id);
+    if (idx === -1 || room.players[idx].isSpectator) return;
+
+    const wasHost = (socket.id === room.hostId);
+    room.players[idx].isSpectator = true;
+    delete room.scores[socket.id];
+    room.spectatorCorrectCounts[socket.id] = 0;
+    socket.join(room.id + ':spectators');
+
+    if (wasHost) {
+      room.hostId = null;
+      getHostId(room);
+    }
+
+    io.to(room.id).emit('playerSwitched', {
+      player: room.players[idx],
+      players: room.players.filter(p => !room.disconnectedPlayers[p.id]),
+      isNowPlayer: false,
+      hostId: getHostId(room)
+    });
+  });
+
+  socket.on('switchToPlayer', () => {
+    const room = getRoomBySocket(socket);
+    if (!room) return;
+    const idx = room.players.findIndex(p => p.id === socket.id);
+    if (idx === -1 || !room.players[idx].isSpectator) return;
+
+    room.players[idx].isSpectator = false;
+    room.scores[socket.id] = 0;
+    socket.leave(room.id + ':spectators');
+    if (!room.hostId) room.hostId = socket.id;
+
+    io.to(room.id).emit('playerSwitched', {
+      player: room.players[idx],
+      players: room.players.filter(p => !room.disconnectedPlayers[p.id]),
+      isNowPlayer: true,
+      hostId: getHostId(room)
+    });
+  });
+
+  socket.on('updateSettings', (newSettings) => {
+    const room = getRoomBySocket(socket);
+    if (!room || getHostId(room) !== socket.id) return;
+    room.gameSettings = { ...room.gameSettings, ...newSettings };
+    io.to(room.id).emit('settingsUpdated', room.gameSettings);
+  });
+
+  socket.on('updateWordList', (words) => {
+    const room = getRoomBySocket(socket);
+    if (!room || getHostId(room) !== socket.id) return;
+    room.customWords = words;
+    io.to(room.id).emit('wordListUpdated', { count: room.customWords.length, isUsingCustom: true });
+  });
+
+  socket.on('startGame', () => {
+    const room = getRoomBySocket(socket);
+    if (room && getHostId(room) === socket.id) startGame(room, socket);
+  });
+
+  socket.on('restartGame', () => {
+    const room = getRoomBySocket(socket);
+    if (room && getHostId(room) === socket.id) restartGame(room);
+  });
+
+  socket.on('forceEndGame', () => {
+    const room = getRoomBySocket(socket);
+    if (!room || getHostId(room) !== socket.id) return;
+    if (room.gameState === 'playing' || room.gameState === 'selectingWord') {
+      io.to(room.id).emit('chat', { name: '系统', message: '⚠️ 房主强制结束了游戏', isSystem: true });
+      endGame(room);
+    }
+  });
+
+  socket.on('selectWord', (word) => {
+    const room = getRoomBySocket(socket);
+    if (!room || room.gameState !== 'selectingWord') return;
+    if (room.players[room.currentDrawerIndex]?.id === socket.id) {
+      selectWord(room, word);
+    }
+  });
+
+  // 笔画开始标记
+  socket.on('startStroke', () => {
+    const room = getRoomBySocket(socket);
+    if (!room) return;
+    room.canvasHistory.push({ type: 'startStroke' });
+    socket.broadcast.to(room.id).emit('startStroke');
+  });
+
+  // 笔画结束标记
+  socket.on('endStroke', () => {
+    const room = getRoomBySocket(socket);
+    if (!room) return;
+    room.canvasHistory.push({ type: 'endStroke' });
+    socket.broadcast.to(room.id).emit('endStroke');
+  });
+
+  socket.on('draw', (data) => {
+    const room = getRoomBySocket(socket);
+    if (!room) return;
+    room.canvasHistory.push({ type: 'draw', data });
+    socket.broadcast.to(room.id).emit('draw', data);
+  });
+
+  socket.on('fill', (data) => {
+    const room = getRoomBySocket(socket);
+    if (!room) return;
+    room.canvasHistory.push({ type: 'fill', data });
+    socket.broadcast.to(room.id).emit('fill', data);
+  });
+
+  socket.on('undo', () => {
+    const room = getRoomBySocket(socket);
+    if (!room || room.players[room.currentDrawerIndex]?.id !== socket.id) return;
+    if (room.canvasHistory.length === 0) return;
+
+    // 撤回一整笔：若末尾是 fill 直接移除；若是 endStroke 则一直移除直到 startStroke（含）
+    const history = room.canvasHistory;
+    let popped = false;
+    const last = history[history.length - 1];
+
+    if (last.type === 'fill') {
+      history.pop();
+      popped = true;
+    } else if (last.type === 'endStroke') {
+      history.pop(); // 移除 endStroke
+      while (history.length > 0 && history[history.length - 1].type !== 'startStroke') {
+        history.pop();
+      }
+      if (history.length > 0 && history[history.length - 1].type === 'startStroke') {
+        history.pop();
+        popped = true;
+      }
+    }
+
+    if (popped) {
+      io.to(room.id).emit('canvasHistoryUpdated', room.canvasHistory);
+    }
+  });
+
+  socket.on('clearCanvas', () => {
+    const room = getRoomBySocket(socket);
+    if (!room) return;
+    room.canvasHistory = [];
+    socket.broadcast.to(room.id).emit('clearCanvas');
+  });
+
+  socket.on('chat', (message) => {
+    const room = getRoomBySocket(socket);
+    if (!room) return;
+    const player = room.players.find(p => p.id === socket.id);
+    if (!player) return;
+
+    // 画手也可以发言（直接广播，不检查答案）
+    if (room.gameState === 'playing' && room.players[room.currentDrawerIndex]?.id === socket.id) {
+      io.to(room.id).emit('chat', { name: player.name, message });
+      return;
+    }
+
+    // 检查是否猜中词语（忽略空格、大小写，支持别名）
+    if (room.gameState === 'playing' && isWordMatched(message, room.currentWord)) {
+      if (!player.isSpectator) {
+        if (!room.guessedPlayers.includes(socket.id)) {
+          room.guessedPlayers.push(socket.id);
+          const activeCount = getActivePlayers(room).length;
+          const guessOrder = room.guessedPlayers.length - 1;
+          const guessScore = activeCount - 1 - guessOrder;
+          room.scores[socket.id] += guessScore;
+
+          io.to(room.id).emit('chat', {
+            name: '系统', message: `🎉 ${player.name} 猜对了！获得 ${guessScore} 分`, isSystem: true
+          });
+          io.to(room.id).emit('scoreUpdate', room.scores);
+
+          if (room.guessedPlayers.length >= activeCount - 1) {
+            endTurn(room);
+          }
+        }
+      } else {
+        if (!room.currentSpectatorGuessed.has(socket.id)) {
+          room.currentSpectatorGuessed.add(socket.id);
+          room.spectatorCorrectCounts[socket.id] = (room.spectatorCorrectCounts[socket.id] || 0) + 1;
+
+          io.to(room.id + ':spectators').emit('chat', {
+            name: '系统', message: `👀 ${player.name} 猜对了`, isSystem: true
+          });
+          io.to(room.id + ':spectators').emit('spectatorCorrectUpdate', {
+            id: socket.id, name: player.name, correctCount: room.spectatorCorrectCounts[socket.id]
+          });
+        }
+      }
+      return;
+    }
+
+    // 普通聊天消息
+    if (player.isSpectator) {
+      io.to(room.id + ':spectators').emit('chat', { name: player.name, message, spectatorChat: true });
+    } else {
+      io.to(room.id).emit('chat', { name: player.name, message });
+    }
+  });
+
+  socket.on('disconnect', () => {
+    const room = getRoomBySocket(socket);
+    if (room) removePlayerFromRoom(socket, room, true);
+  });
+});
+
+const PORT = process.env.PORT || 3000;
+server.listen(PORT, () => console.log(`服务器运行在 http://localhost:${PORT}`));
