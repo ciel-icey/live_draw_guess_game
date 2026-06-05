@@ -184,7 +184,23 @@
   }
 
   const MAX_PLAYERS = 20, MAX_SPECTATORS = 30;
-  let savedPlayerId = localStorage.getItem('drawGuessPlayerId');
+  const RECONNECT_STORAGE_KEY = 'drawGuessSession';
+  function loadReconnectSession() {
+    try {
+      return JSON.parse(localStorage.getItem(RECONNECT_STORAGE_KEY) || 'null') || {};
+    } catch {
+      return {};
+    }
+  }
+  function saveReconnectSession(session) {
+    if (!session.roomId || !session.playerId || !session.reconnectToken) return;
+    localStorage.setItem(RECONNECT_STORAGE_KEY, JSON.stringify(session));
+    localStorage.removeItem('drawGuessPlayerId');
+  }
+  function clearReconnectSession() {
+    localStorage.removeItem(RECONNECT_STORAGE_KEY);
+    localStorage.removeItem('drawGuessPlayerId');
+  }
   const socket = io({ reconnection: true, reconnectionAttempts: 10, reconnectionDelay: 1000 });
 
   // 用户状态
@@ -392,6 +408,13 @@
     socket.emit('joinRoom', roomId, myName, asSpectator);
   }
 
+  function leaveCurrentRoom() {
+    socket.emit('leaveRoom');
+    clearReconnectSession();
+    currentRoomId = '';
+    showLobby();
+  }
+
   // 房间列表渲染
   function renderRoomList(rooms) {
     roomListContainer.innerHTML = '';
@@ -422,7 +445,7 @@
     if (name) { myName = name; showLobby(); } else alert('请输入昵称');
   });
   nicknameInput.addEventListener('keypress', e => e.key==='Enter' && confirmNicknameBtn.click());
-  logoutBtn.addEventListener('click', () => { socket.emit('leaveRoom'); currentRoomId=''; showLobby(); });
+  logoutBtn.addEventListener('click', leaveCurrentRoom);
 
   socket.on('roomList', renderRoomList);
   socket.on('roomListUpdate', renderRoomList);
@@ -465,8 +488,15 @@
     myId = data.player.id; isHost = data.isHost; isSpectator = data.player.isSpectator; players = data.players;
     roomTitle.textContent = data.roomName || '房间: ' + data.roomId;
     roomIdDisplay.textContent = data.roomId; currentRoomId = data.roomId;
+    if (data.reconnectToken) {
+      saveReconnectSession({ roomId: data.roomId, playerId: data.player.id, reconnectToken: data.reconnectToken });
+    }
     waitingStatus.textContent = '等待房主开始游戏...';
     updatePlayerListWaiting(data);
+  });
+
+  socket.on('reconnectInfo', data => {
+    saveReconnectSession(data);
   });
 
   socket.on('playerJoined', data => {
@@ -481,6 +511,15 @@
   });
   socket.on('playerDisconnected', data => updatePlayerListWaiting({players: data.players, hostId: data.hostId}));
   socket.on('playerLeft', data => updatePlayerListWaiting({players: data.players, hostId: data.hostId}));
+  socket.on('playerReconnected', data => {
+    players = data.players;
+    scores = data.scores;
+    if (data.isCurrentDrawer && currentDrawerId === data.oldId) {
+      currentDrawerId = data.newPlayer.id;
+    }
+    if (!waitingScreen.classList.contains('hidden')) updatePlayerListWaiting({players: data.players, hostId: data.hostId});
+    if (!gameScreen.classList.contains('hidden')) updateScoreList(data.scores, data.players);
+  });
   socket.on('playerSwitched', data => {
     const idx = players.findIndex(p => p.id === data.player.id);
     if (idx !== -1) players[idx] = data.player;
@@ -492,7 +531,7 @@
   });
 
   startGameBtn.addEventListener('click', () => socket.emit('startGame'));
-  leaveRoomBtn.addEventListener('click', () => { socket.emit('leaveRoom'); currentRoomId=''; showLobby(); });
+  leaveRoomBtn.addEventListener('click', leaveCurrentRoom);
   toggleRoleBtn.addEventListener('click', () => socket.emit(isSpectator ? 'switchToPlayer' : 'switchToSpectator'));
 
   const autoSaveSettings = debounce(() => {
@@ -684,7 +723,8 @@
 
   socket.on('reconnectSuccess', data => {
     myId = data.player.id; myName = data.player.name; isHost = data.isHost; isSpectator = data.isSpectator;
-    players = data.players; scores = data.scores; currentRoomId = data.roomId;
+    players = data.players; scores = data.scores; currentRoomId = data.roomId; isDrawer = !!data.isDrawer;
+    saveReconnectSession({ roomId: data.roomId, playerId: data.player.id, reconnectToken: data.reconnectToken });
     if (data.gameState === 'waiting') showWaiting(data.roomId, '');
     else if (data.gameState === 'finished') showEndScreen();
     else {
@@ -692,11 +732,26 @@
       localCanvasHistory = data.canvasHistory || []; redrawCanvasFromHistory(localCanvasHistory);
       currentDrawerId = data.currentDrawerId; currentDrawer.textContent = data.currentDrawer || '';
       updateScoreList(scores, players); updateForceEndBtn();
-      if (data.isDrawer) { setDrawerToolsEnabled(true); resetToolsToPen(); }
+      if (isDrawer) {
+        wordDisplay.textContent = `你要画: ${data.currentWord || ''}`;
+        wordDisplay.className = 'mt-3 text-xl font-medium text-center text-green-600';
+        chatInput.disabled = false;
+        chatInput.placeholder = '画手可以发言...';
+        setDrawerToolsEnabled(true);
+        resetToolsToPen();
+      }
       else setDrawerToolsEnabled(false);
     }
   });
-  socket.on('connect', () => { if (savedPlayerId) socket.emit('reconnectAttempt', savedPlayerId); });
+  socket.on('reconnectFailed', () => {
+    clearReconnectSession();
+  });
+  socket.on('connect', () => {
+    const savedSession = loadReconnectSession();
+    if (savedSession.roomId && savedSession.playerId && savedSession.reconnectToken) {
+      socket.emit('reconnectAttempt', savedSession);
+    }
+  });
 
   // ========== 画布交互 ==========
   function getCanvasCoords(e) {
@@ -824,7 +879,7 @@
     else showWaiting(currentRoomId, '');
   });
   switchToSpectatorBtn.addEventListener('click', () => socket.emit('switchToSpectator'));
-  leaveEndBtn.addEventListener('click', () => { socket.emit('leaveRoom'); currentRoomId = ''; showLobby(); });
+  leaveEndBtn.addEventListener('click', leaveCurrentRoom);
 </script>
 </body>
 </html>
