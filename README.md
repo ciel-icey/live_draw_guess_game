@@ -46,8 +46,8 @@
 
 ### 1. 克隆仓库
 ```bash
-git clone https://github.com/你的用户名/DrawGuessRoom.git
-cd DrawGuessRoom
+git clone https://github.com/ciel-icey/live_draw_guess_game
+cd live_draw_guess_game
 ```
 
 ### 2. 安装依赖
