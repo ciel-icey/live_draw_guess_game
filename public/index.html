@@ -26,6 +26,171 @@
     .file-upload { position: relative; overflow: hidden; display: inline-block; }
     .file-upload input[type=file] { position: absolute; left: 0; top: 0; opacity: 0; cursor: pointer; }
     .btn-active { background-color: #3b82f6 !important; color: white !important; }
+    .color-swatch {
+      width: 32px;
+      height: 32px;
+      border-radius: 8px;
+      border: 2px solid rgba(17, 24, 39, 0.2);
+      flex: 0 0 auto;
+    }
+    .color-swatch.active {
+      border-color: #2563eb;
+      box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.25);
+    }
+    .color-picker-input {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      opacity: 0;
+      cursor: pointer;
+    }
+    @media (max-width: 768px) {
+      #gameScreen { min-height: 100dvh; }
+      #gameScreen > .container {
+        min-height: 100dvh;
+        max-width: none;
+        padding: 8px 8px 12px;
+        display: flex;
+        flex-direction: column;
+      }
+      #gameHeader {
+        flex: 0 0 auto;
+        padding: 10px;
+        margin-bottom: 8px;
+        border-radius: 14px;
+      }
+      #gameHeader .game-meta { font-size: 12px; line-height: 1.4; }
+      #gameHeader .game-timer { font-size: 18px; }
+      #forceEndBtn { padding: 6px 10px; font-size: 12px; }
+      #wordDisplay {
+        min-height: 22px;
+        margin-top: 6px !important;
+        font-size: 16px !important;
+        line-height: 1.35;
+      }
+      #gameLayout {
+        flex: 0 0 auto;
+        min-height: 0;
+        display: flex !important;
+        flex-direction: column;
+        gap: 8px;
+      }
+      #playersColumn {
+        order: 1 !important;
+        width: 100% !important;
+        flex: 0 0 auto;
+      }
+      #playersPanel {
+        padding: 8px !important;
+        margin-bottom: 0 !important;
+      }
+      #playersPanel h3 {
+        margin-bottom: 6px !important;
+        font-size: 13px;
+      }
+      #playerScores {
+        display: flex;
+        gap: 6px;
+        overflow-x: auto;
+        padding-bottom: 2px;
+      }
+      #playerScores > div {
+        flex: 0 0 auto;
+        min-width: 96px;
+        padding: 6px 8px !important;
+        font-size: 12px;
+      }
+      #canvasColumn {
+        order: 2 !important;
+        width: 100% !important;
+        flex: 0 0 auto;
+        min-height: 0;
+        display: flex;
+      }
+      #canvasPanel {
+        width: 100%;
+        flex: 0 0 auto;
+        min-height: 0;
+        padding: 8px !important;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+      }
+      #tools {
+        width: 100%;
+        gap: 6px !important;
+        margin-bottom: 8px !important;
+        overflow-x: visible;
+        flex-wrap: wrap !important;
+        justify-content: center;
+        align-items: stretch;
+        padding-bottom: 0;
+      }
+      #colorTools {
+        width: 100%;
+        flex-wrap: wrap;
+        justify-content: center;
+        gap: 6px !important;
+      }
+      #colorSwatches {
+        flex-wrap: wrap;
+        justify-content: center;
+        gap: 4px !important;
+      }
+      #customColorLabel {
+        min-height: 36px;
+        flex: 0 0 auto;
+      }
+      #tools > div:not(#colorTools) {
+        flex: 1 1 calc(50% - 6px);
+        min-width: 132px;
+        justify-content: center;
+      }
+      #tools > button {
+        flex: 1 1 calc(33.333% - 6px);
+        min-width: 72px;
+        padding: 6px 8px !important;
+        font-size: 12px;
+        white-space: nowrap;
+      }
+      #tools input[type="range"] { width: min(36vw, 120px); }
+      #tools label, #tools span { font-size: 12px; }
+      .color-swatch {
+        width: 36px;
+        height: 36px;
+      }
+      #canvas {
+        flex: 0 0 auto;
+        width: 100%;
+        max-width: 100%;
+      }
+      #chatColumn {
+        order: 3 !important;
+        width: 100% !important;
+        flex: 0 0 auto;
+        min-height: 132px;
+        position: sticky;
+        bottom: 8px;
+        z-index: 20;
+      }
+      #chatPanel {
+        height: 132px !important;
+        padding: 8px !important;
+      }
+      #chatPanel h3 { display: none; }
+      #chat {
+        max-height: none !important;
+        min-height: 0;
+        margin-bottom: 6px !important;
+        font-size: 12px;
+      }
+      #chat > div { padding: 6px !important; }
+      #chatInput {
+        padding: 10px 12px !important;
+        font-size: 16px;
+      }
+    }
   </style>
 </head>
 <body class="bg-gradient-to-br from-blue-50 to-purple-50 min-h-screen">
@@ -72,7 +237,7 @@
       <div id="playerListWaiting" class="mb-6 max-h-40 overflow-y-auto space-y-2"></div>
       <div id="hostSettings" class="hidden mb-6 p-4 bg-gray-50 rounded-lg">
         <h3 class="font-medium mb-3">游戏设置</h3>
-        <div class="mb-3"><label class="text-sm">绘画时间(秒)</label><input type="number" id="drawTimeInput" min="30" max="120" value="60" class="w-full px-3 py-2 border rounded"></div>
+        <div class="mb-3"><label class="text-sm">绘画时间(秒)</label><input type="number" id="drawTimeInput" min="30" max="360" value="60" class="w-full px-3 py-2 border rounded"></div>
         <div class="mb-3"><label class="text-sm">选题时间(秒)</label><input type="number" id="selectTimeInput" min="10" max="30" value="15" class="w-full px-3 py-2 border rounded"></div>
         <div class="mb-3"><label class="text-sm">总轮数</label><input type="number" id="roundsInput" min="1" max="10" value="3" class="w-full px-3 py-2 border rounded"></div>
         <div class="mb-3"><label class="text-sm">导入词库(TXT)</label><div class="file-upload w-full"><button class="w-full bg-blue-100 text-blue-700 py-2 rounded">选择文件</button><input type="file" id="wordFileInput" accept=".txt"></div><p id="wordCountText" class="text-xs text-gray-500 mt-1">系统默认词库</p></div>
@@ -97,33 +262,48 @@
 
 <div id="gameScreen" class="hidden">
   <div class="container mx-auto p-4">
-    <div class="bg-white rounded-xl shadow-lg p-4 mb-4">
+    <div id="gameHeader" class="bg-white rounded-xl shadow-lg p-4 mb-4">
       <div class="flex flex-wrap justify-between items-center gap-4">
-        <div>
+        <div class="game-meta">
           <span class="text-gray-600">第 <span id="currentRound" class="font-bold text-blue-600">1</span> / <span id="totalRounds">3</span> 轮</span>
           <span class="mx-4 text-gray-300">|</span>
           <span class="text-gray-600">当前画手: <span id="currentDrawer" class="font-bold text-purple-600">-</span></span>
         </div>
         <div class="flex items-center gap-4">
           <button id="forceEndBtn" class="hidden px-4 py-2 bg-red-100 text-red-600 border border-red-300 rounded-lg btn-hover text-sm font-bold">强制结束</button>
-          <div class="text-2xl font-bold">倒计时: <span id="timer" class="text-red-500">60</span>秒</div>
+          <div class="game-timer text-2xl font-bold">倒计时: <span id="timer" class="text-red-500">60</span>秒</div>
         </div>
       </div>
       <div id="wordDisplay" class="mt-3 text-xl font-medium text-center"></div>
     </div>
 
-    <div class="flex flex-col lg:flex-row gap-4">
-      <div class="lg:w-1/5 order-2 lg:order-1">
-        <div class="bg-white rounded-xl shadow-lg p-4 mb-4">
+    <div id="gameLayout" class="flex flex-col lg:flex-row gap-4">
+      <div id="playersColumn" class="lg:w-1/5 order-2 lg:order-1">
+        <div id="playersPanel" class="bg-white rounded-xl shadow-lg p-4 mb-4">
           <h3 class="font-bold text-gray-700 mb-3">🏆 玩家列表</h3>
           <div id="playerScores" class="space-y-2"></div>
         </div>
       </div>
 
-      <div class="lg:w-3/5 order-1 lg:order-2">
-        <div class="bg-white rounded-xl shadow-lg p-4">
-          <div id="tools" class="flex flex-wrap gap-3 mb-4 items-center">
-            <input type="color" id="colorPicker" value="#000000" class="w-10 h-10 rounded-lg border-2 border-gray-300">
+      <div id="canvasColumn" class="lg:w-3/5 order-1 lg:order-2">
+        <div id="canvasPanel" class="bg-white rounded-xl shadow-lg p-4">
+          <div id="tools" class="hidden flex flex-wrap gap-3 mb-4 items-center">
+            <div id="colorTools" class="flex items-center gap-2">
+              <div id="colorSwatches" class="flex items-center gap-1">
+                <button type="button" class="color-swatch active" data-color="#000000" style="background:#000000" aria-label="黑色"></button>
+                <button type="button" class="color-swatch" data-color="#ef4444" style="background:#ef4444" aria-label="红色"></button>
+                <button type="button" class="color-swatch" data-color="#f97316" style="background:#f97316" aria-label="橙色"></button>
+                <button type="button" class="color-swatch" data-color="#eab308" style="background:#eab308" aria-label="黄色"></button>
+                <button type="button" class="color-swatch" data-color="#22c55e" style="background:#22c55e" aria-label="绿色"></button>
+                <button type="button" class="color-swatch" data-color="#3b82f6" style="background:#3b82f6" aria-label="蓝色"></button>
+                <button type="button" class="color-swatch" data-color="#a855f7" style="background:#a855f7" aria-label="紫色"></button>
+              </div>
+              <label id="customColorLabel" class="relative flex items-center gap-1 px-2 py-1 bg-gray-100 rounded-lg border border-gray-300 overflow-hidden">
+                <span id="currentColorPreview" class="inline-block w-5 h-5 rounded border border-gray-400" style="background:#000000"></span>
+                <span class="text-sm whitespace-nowrap">自选</span>
+                <input type="color" id="colorPicker" value="#000000" class="color-picker-input" aria-label="自选颜色">
+              </label>
+            </div>
             <div class="flex items-center gap-2"><label class="text-sm">笔刷:</label><input type="range" id="brushSize" min="1" max="20" value="3" class="w-20"><span id="brushSizeValue">3</span></div>
             <div class="flex items-center gap-2"><label class="text-sm">橡皮:</label><input type="range" id="eraserSize" min="5" max="50" value="20" class="w-20"><span id="eraserSizeValue">20</span></div>
             <button id="penBtn" class="px-4 py-2 bg-gray-200 rounded-lg btn-hover disabled:opacity-50" disabled title="画笔">✏️ 画笔</button>
@@ -136,8 +316,8 @@
         </div>
       </div>
 
-      <div class="lg:w-1/5 order-3">
-        <div class="bg-white rounded-xl shadow-lg p-4 h-full flex flex-col">
+      <div id="chatColumn" class="lg:w-1/5 order-3">
+        <div id="chatPanel" class="bg-white rounded-xl shadow-lg p-4 h-full flex flex-col">
           <h3 class="font-bold text-gray-700 mb-3">💬 聊天</h3>
           <div id="chat" class="flex-1 overflow-y-auto mb-4 space-y-2 max-h-96"></div>
           <input type="text" id="chatInput" placeholder="输入消息..." class="w-full px-4 py-3 border rounded-lg">
@@ -232,9 +412,11 @@
   const startGameBtn = $('startGameBtn'), toggleRoleBtn = $('toggleRoleBtn'), leaveRoomBtn = $('leaveRoomBtn');
   const wordSelectTimer = $('wordSelectTimer'), wordOptions = $('wordOptions');
   const canvas = $('canvas'), ctx = canvas.getContext('2d');
+  const tools = $('tools');
   const currentRound = $('currentRound'), totalRounds = $('totalRounds'), currentDrawer = $('currentDrawer');
   const timer = $('timer'), wordDisplay = $('wordDisplay'), playerScores = $('playerScores');
   const chat = $('chat'), chatInput = $('chatInput'), colorPicker = $('colorPicker');
+  const colorSwatches = [...document.querySelectorAll('.color-swatch')], currentColorPreview = $('currentColorPreview');
   const penBtn = $('penBtn'), eraserBtn = $('eraserBtn'), fillBtn = $('fillBtn'), undoBtn = $('undoBtn'), clearBtn = $('clearBtn');
   const brushSize = $('brushSize'), brushSizeValue = $('brushSizeValue');
   const eraserSize = $('eraserSize'), eraserSizeValue = $('eraserSizeValue');
@@ -270,12 +452,20 @@
   // 画布辅助
   function resizeCanvas() {
     const container = canvas.parentElement;
-    const maxWidth = container.clientWidth - 32;
+    const maxWidth = container.clientWidth - 16;
     const aspectRatio = 4/3;
+    const isMobile = window.matchMedia('(max-width: 768px)').matches;
+    if (isMobile) {
+      const targetWidth = Math.min(maxWidth, 800);
+      canvas.style.width = targetWidth + 'px';
+      canvas.style.height = (targetWidth / aspectRatio) + 'px';
+      return;
+    }
     canvas.style.width = maxWidth < 800 ? maxWidth + 'px' : '800px';
     canvas.style.height = (maxWidth / aspectRatio) < 600 ? (maxWidth / aspectRatio) + 'px' : '600px';
   }
   window.addEventListener('resize', resizeCanvas);
+  if (window.visualViewport) window.visualViewport.addEventListener('resize', resizeCanvas);
 
   function addChatMessage(data) {
     const div = document.createElement('div');
@@ -337,11 +527,36 @@
   }
 
   function setDrawerToolsEnabled(enabled) {
-    penBtn.disabled = !enabled;
-    eraserBtn.disabled = !enabled;
-    fillBtn.disabled = !enabled;
-    undoBtn.disabled = !enabled;
-    clearBtn.disabled = !enabled;
+    const canDraw = !!enabled;
+    tools.classList.toggle('hidden', !canDraw);
+    colorPicker.disabled = !canDraw;
+    colorSwatches.forEach(btn => btn.disabled = !canDraw);
+    penBtn.disabled = !canDraw;
+    eraserBtn.disabled = !canDraw;
+    fillBtn.disabled = !canDraw;
+    undoBtn.disabled = !canDraw;
+    clearBtn.disabled = !canDraw;
+    if (!canDraw) {
+      isEraser = false;
+      isFillMode = false;
+      currentTool = 'pen';
+      canvas.style.cursor = '';
+    }
+    resizeCanvas();
+  }
+
+  function setCurrentColor(color) {
+    currentColor = color;
+    colorPicker.value = color;
+    currentColorPreview.style.backgroundColor = color;
+    colorSwatches.forEach(btn => btn.classList.toggle('active', btn.dataset.color === color));
+    if (currentTool === 'eraser') {
+      currentTool = 'pen';
+      isEraser = false;
+      eraserBtn.classList.remove('btn-active');
+      penBtn.classList.add('btn-active');
+      canvas.style.cursor = '';
+    }
   }
 
   function resetToolsToPen() {
@@ -537,7 +752,7 @@
   const autoSaveSettings = debounce(() => {
     if (isHost && !isSpectator) {
       socket.emit('updateSettings', {
-        drawTime: Math.max(30, Math.min(120, +drawTimeInput.value || 60)),
+        drawTime: Math.max(30, Math.min(360, +drawTimeInput.value || 60)),
         selectWordTime: Math.max(10, Math.min(30, +selectTimeInput.value || 15)),
         totalRounds: Math.max(1, Math.min(10, +roundsInput.value || 3))
       });
@@ -856,14 +1071,19 @@
     socket.emit('undo');
   });
 
+  colorSwatches.forEach(btn => {
+    btn.addEventListener('click', () => {
+      if (!isDrawer || isSpectator) return;
+      setCurrentColor(btn.dataset.color);
+    });
+  });
+  colorPicker.addEventListener('input', e => {
+    if (!isDrawer || isSpectator) return;
+    setCurrentColor(e.target.value);
+  });
   colorPicker.addEventListener('change', e => {
-    currentColor = e.target.value;
-    if (currentTool === 'eraser') {
-      currentTool = 'pen'; isEraser = false;
-      eraserBtn.classList.remove('btn-active');
-      penBtn.classList.add('btn-active');
-      canvas.style.cursor = '';
-    }
+    if (!isDrawer || isSpectator) return;
+    setCurrentColor(e.target.value);
   });
   brushSize.addEventListener('input', e => brushSizeValue.textContent = e.target.value);
   eraserSize.addEventListener('input', e => eraserSizeValue.textContent = e.target.value);
