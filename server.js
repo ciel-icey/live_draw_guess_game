@@ -45,6 +45,52 @@ app.use(express.json({ limit: '1mb' }));
 
 const MAX_PLAYERS = 20;
 const MAX_SPECTATORS = 30;
+const LOG_DIR = path.join(__dirname, 'logs');
+
+function getLogDateKey(date = new Date()) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+function getPlayerLogPath(date = new Date()) {
+  return path.join(LOG_DIR, `player-activity-${getLogDateKey(date)}.log`);
+}
+
+function formatDuration(ms) {
+  if (!Number.isFinite(ms) || ms < 0) return null;
+  const totalSeconds = Math.floor(ms / 1000);
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+  return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+}
+
+function logPlayerActivity(action, details = {}) {
+  const now = new Date();
+  const entry = {
+    time: now.toISOString(),
+    action,
+    username: details.username || '',
+    roomId: details.roomId || '',
+    roomName: details.roomName || '',
+    role: details.role || '',
+    socketId: details.socketId || '',
+    reason: details.reason || '',
+    duration: details.duration || null
+  };
+  const line = JSON.stringify(entry) + '\n';
+  fs.mkdir(LOG_DIR, { recursive: true }, (mkdirErr) => {
+    if (mkdirErr) {
+      console.warn(`写入玩家日志失败，无法创建目录: ${mkdirErr.message}`);
+      return;
+    }
+    fs.appendFile(getPlayerLogPath(now), line, (writeErr) => {
+      if (writeErr) console.warn(`写入玩家日志失败: ${writeErr.message}`);
+    });
+  });
+}
 
 const defaultWords = ['苹果', '香蕉', '猫', '狗', '太阳', '月亮', '星星', '电脑', '手机', '书本',
   '汽车', '飞机', '房子', '树', '花', '鱼', '鸟', '蛋糕', '冰淇淋', '篮球', '足球', '雨伞',
@@ -108,6 +154,16 @@ setInterval(() => {
 
     for (const id in room.disconnectedPlayers) {
       if (now - room.disconnectedPlayers[id].disconnectTime > 5 * 60 * 1000) {
+        const disconnected = room.disconnectedPlayers[id];
+        logPlayerActivity('logout', {
+          username: disconnected.player?.name,
+          roomId,
+          roomName: room.name,
+          role: disconnected.player?.isSpectator ? 'spectator' : 'player',
+          socketId: id,
+          reason: 'disconnect_timeout',
+          duration: formatDuration(now - (disconnected.player?.joinedAt || disconnected.disconnectTime))
+        });
         delete room.disconnectedPlayers[id];
         delete room.scores[id];
         delete room.spectatorCorrectCounts[id];
@@ -370,6 +426,16 @@ function removePlayerFromRoom(socket, room, isDisconnect = false) {
   if (idx === -1) return;
 
   const player = room.players[idx];
+  const eventAt = Date.now();
+  logPlayerActivity(isDisconnect ? 'disconnect' : 'logout', {
+    username: player.name,
+    roomId: room.id,
+    roomName: room.name,
+    role: player.isSpectator ? 'spectator' : 'player',
+    socketId: socket.id,
+    reason: isDisconnect ? 'socket_disconnect' : 'leave_room',
+    duration: formatDuration(eventAt - (player.joinedAt || eventAt))
+  });
   if (isDisconnect) {
     room.disconnectedPlayers[socket.id] = {
       player,
@@ -438,6 +504,15 @@ io.on('connection', (socket) => {
 
       room.players[playerIndex].id = socket.id;
       if (room.hostId === oldId) room.hostId = socket.id;
+      logPlayerActivity('reconnect', {
+        username: room.players[playerIndex].name,
+        roomId: room.id,
+        roomName: room.name,
+        role: room.players[playerIndex].isSpectator ? 'spectator' : 'player',
+        socketId: socket.id,
+        reason: 'reconnect_success',
+        duration: formatDuration(Date.now() - (room.players[playerIndex].joinedAt || Date.now()))
+      });
 
       if (!player.isSpectator) room.scores[socket.id] = oldScores || 0;
       delete room.scores[oldId];
@@ -499,7 +574,7 @@ io.on('connection', (socket) => {
 
     const roomId = createRoom(roomName);
     const reconnectToken = createReconnectToken();
-    const player = { id: socket.id, name: playerName, isSpectator: false };
+    const player = { id: socket.id, name: playerName, isSpectator: false, joinedAt: Date.now() };
     rooms[roomId].players.push(player);
     rooms[roomId].hostId = socket.id;
     rooms[roomId].scores[socket.id] = 0;
@@ -512,6 +587,14 @@ io.on('connection', (socket) => {
       reconnectToken
     });
     socket.emit('reconnectInfo', { roomId, playerId: socket.id, reconnectToken });
+    logPlayerActivity('login', {
+      username: player.name,
+      roomId,
+      roomName: rooms[roomId].name,
+      role: 'player',
+      socketId: socket.id,
+      reason: 'create_room'
+    });
     io.emit('roomListUpdate', getRoomListForBroadcast());
   });
 
@@ -543,7 +626,7 @@ io.on('connection', (socket) => {
       return;
     }
 
-    const player = { id: socket.id, name: playerName, isSpectator: asSpectator };
+    const player = { id: socket.id, name: playerName, isSpectator: asSpectator, joinedAt: Date.now() };
     const reconnectToken = createReconnectToken();
     room.players.push(player);
     if (!asSpectator) room.scores[socket.id] = 0;
@@ -573,6 +656,14 @@ io.on('connection', (socket) => {
       reconnectToken
     });
     socket.emit('reconnectInfo', { roomId: room.id, playerId: socket.id, reconnectToken });
+    logPlayerActivity('login', {
+      username: player.name,
+      roomId: room.id,
+      roomName: room.name,
+      role: asSpectator ? 'spectator' : 'player',
+      socketId: socket.id,
+      reason: asSpectator ? 'join_as_spectator' : 'join_room'
+    });
 
     if (room.gameState === 'playing' || room.gameState === 'selectingWord') {
       socket.emit('gameInProgress', {
@@ -642,7 +733,12 @@ io.on('connection', (socket) => {
   socket.on('updateSettings', (newSettings) => {
     const room = getRoomBySocket(socket);
     if (!room || getHostId(room) !== socket.id) return;
-    room.gameSettings = { ...room.gameSettings, ...newSettings };
+    room.gameSettings = {
+      ...room.gameSettings,
+      drawTime: Math.max(30, Math.min(360, Number(newSettings.drawTime) || room.gameSettings.drawTime)),
+      selectWordTime: Math.max(10, Math.min(30, Number(newSettings.selectWordTime) || room.gameSettings.selectWordTime)),
+      totalRounds: Math.max(1, Math.min(10, Number(newSettings.totalRounds) || room.gameSettings.totalRounds))
+    };
     io.to(room.id).emit('settingsUpdated', room.gameSettings);
   });
 
@@ -650,7 +746,7 @@ io.on('connection', (socket) => {
     const room = getRoomBySocket(socket);
     if (!room || getHostId(room) !== socket.id) return;
     room.customWords = words;
-    io.to(room.id).emit('wordListUpdated', { count: room.customWords.length, isUsingCustom: true });
+    socket.emit('wordListUpdated', { count: room.customWords.length, isUsingCustom: true });
   });
 
   socket.on('startGame', () => {
