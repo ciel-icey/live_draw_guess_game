@@ -3,8 +3,10 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-  <title>你画我猜 - 房间版</title>
+  <title>你画我猜</title>
   <script src="https://cdn.tailwindcss.com"></script>
+  <!-- 引入 SheetJS 用于处理 Excel 文件 -->
+  <script src="https://cdn.sheetjs.com/xlsx-0.20.0/package/dist/xlsx.full.min.js"></script>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
@@ -237,10 +239,17 @@
       <div id="playerListWaiting" class="mb-6 max-h-40 overflow-y-auto space-y-2"></div>
       <div id="hostSettings" class="hidden mb-6 p-4 bg-gray-50 rounded-lg">
         <h3 class="font-medium mb-3">游戏设置</h3>
-        <div class="mb-3"><label class="text-sm">绘画时间(秒)</label><input type="number" id="drawTimeInput" min="30" max="360" value="60" class="w-full px-3 py-2 border rounded"></div>
+        <div class="mb-3"><label class="text-sm">绘画时间(秒)</label><input type="number" id="drawTimeInput" min="30" max="360" value="120" class="w-full px-3 py-2 border rounded"></div>
         <div class="mb-3"><label class="text-sm">选题时间(秒)</label><input type="number" id="selectTimeInput" min="10" max="30" value="15" class="w-full px-3 py-2 border rounded"></div>
         <div class="mb-3"><label class="text-sm">总轮数</label><input type="number" id="roundsInput" min="1" max="10" value="3" class="w-full px-3 py-2 border rounded"></div>
-        <div class="mb-3"><label class="text-sm">导入词库(TXT)</label><div class="file-upload w-full"><button class="w-full bg-blue-100 text-blue-700 py-2 rounded">选择文件</button><input type="file" id="wordFileInput" accept=".txt"></div><p id="wordCountText" class="text-xs text-gray-500 mt-1">系统默认词库</p></div>
+        <div class="mb-3">
+          <label class="text-sm">导入词库(TXT/Excel)</label>
+          <div class="file-upload w-full">
+            <button class="w-full bg-blue-100 text-blue-700 py-2 rounded">选择文件</button>
+            <input type="file" id="wordFileInput" accept=".txt,.xlsx,.xls">
+          </div>
+          <p id="wordCountText" class="text-xs text-gray-500 mt-1">系统默认词库</p>
+        </div>
       </div>
       <div class="flex gap-3 mb-3">
         <button id="toggleRoleBtn" class="flex-1 bg-indigo-100 text-indigo-700 py-3 rounded-lg btn-hover">切换为观众</button>
@@ -280,7 +289,7 @@
     <div id="gameLayout" class="flex flex-col lg:flex-row gap-4">
       <div id="playersColumn" class="lg:w-1/5 order-2 lg:order-1">
         <div id="playersPanel" class="bg-white rounded-xl shadow-lg p-4 mb-4">
-          <h3 class="font-bold text-gray-700 mb-3">🏆 玩家列表</h3>
+          <h3 class="font-bold text-gray-700 mb-3">玩家列表</h3>
           <div id="playerScores" class="space-y-2"></div>
         </div>
       </div>
@@ -318,7 +327,7 @@
 
       <div id="chatColumn" class="lg:w-1/5 order-3">
         <div id="chatPanel" class="bg-white rounded-xl shadow-lg p-4 h-full flex flex-col">
-          <h3 class="font-bold text-gray-700 mb-3">💬 聊天</h3>
+          <h3 class="font-bold text-gray-700 mb-3">聊天</h3>
           <div id="chat" class="flex-1 overflow-y-auto mb-4 space-y-2 max-h-96"></div>
           <input type="text" id="chatInput" placeholder="输入消息..." class="w-full px-4 py-3 border rounded-lg">
         </div>
@@ -329,7 +338,7 @@
 
 <div id="endScreen" class="hidden flex items-center justify-center min-h-screen p-4">
   <div class="bg-white rounded-2xl shadow-2xl p-8 max-w-lg w-full text-center">
-    <h1 class="text-3xl font-bold mb-6">🎉 游戏结束！</h1>
+    <h1 class="text-3xl font-bold mb-6">游戏结束！</h1>
     <div id="rankingsContainer" class="mb-6"></div>
     <div id="spectatorRankingsContainer" class="mb-6 border-t pt-4 hidden"></div>
     <div class="flex flex-col gap-3">
@@ -763,21 +772,71 @@
   selectTimeInput.addEventListener('input', autoSaveSettings);
   roundsInput.addEventListener('input', autoSaveSettings);
 
+  // ========== 导入词库 (支持 TXT 和 Excel) ==========
   wordFileInput.addEventListener('change', e => {
     const file = e.target.files[0];
     if (!file || !isHost || isSpectator) return;
-    const reader = new FileReader();
-    reader.onload = ev => {
-      const words = ev.target.result.split(',').map(w => w.trim()).filter(w => w);
-      if (words.length) socket.emit('updateWordList', words);
-      else alert('词库文件格式错误');
-    };
-    reader.readAsText(file, 'utf-8');
+
+    const fileName = file.name.toLowerCase();
+    const isExcel = fileName.endsWith('.xlsx') || fileName.endsWith('.xls');
+
+    if (isExcel) {
+      // 处理 Excel 文件
+      const reader = new FileReader();
+      reader.onload = ev => {
+        try {
+          const data = new Uint8Array(ev.target.result);
+          const workbook = XLSX.read(data, { type: 'array' });
+          const firstSheet = workbook.SheetNames[0];
+          const sheet = workbook.Sheets[firstSheet];
+          // 将 sheet 转为二维数组，header:1 表示不将第一行作为键
+          const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' });
+          
+          const words = [];
+          rows.forEach(row => {
+            if (!Array.isArray(row) || row.length === 0) return;
+            // 第一列是主词，后面都是别名
+            const mainWord = String(row[0] || '').trim();
+            if (!mainWord) return; // 跳过空行
+            const aliases = row.slice(1).map(cell => String(cell || '').trim()).filter(a => a);
+            // 拼接成 "主词/别名1/别名2" 格式
+            const wordEntry = aliases.length > 0 ? `${mainWord}/${aliases.join('/')}` : mainWord;
+            words.push(wordEntry);
+          });
+
+          if (words.length > 0) {
+            socket.emit('updateWordList', words);
+            wordCountText.textContent = `自定义词库 (Excel): ${words.length}词`;
+          } else {
+            alert('Excel 文件中没有有效词条');
+          }
+        } catch (err) {
+          console.error(err);
+          alert('Excel 文件解析失败，请检查格式');
+        }
+      };
+      reader.readAsArrayBuffer(file);
+    } else {
+      // 原有 TXT 处理逻辑 (逗号分隔)
+      const reader = new FileReader();
+      reader.onload = ev => {
+        const words = ev.target.result.split(',').map(w => w.trim()).filter(w => w);
+        if (words.length) {
+          socket.emit('updateWordList', words);
+          wordCountText.textContent = `自定义词库 (TXT): ${words.length}词`;
+        } else {
+          alert('词库文件格式错误');
+        }
+      };
+      reader.readAsText(file, 'utf-8');
+    }
   });
 
   socket.on('wordListUpdated', data => {
-    alert(`导入成功！共 ${data.count} 个词汇`);
-    wordCountText.textContent = `自定义词库：${data.count}词`;
+    // 保留服务端确认消息，但不覆盖已有的文案
+    if (!wordCountText.textContent.includes('自定义词库')) {
+      wordCountText.textContent = `自定义词库：${data.count}词`;
+    }
   });
 
   // ========== 游戏事件 ==========
