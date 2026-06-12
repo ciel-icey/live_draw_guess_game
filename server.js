@@ -20,7 +20,6 @@ if (HTTPS_ENABLED) {
     if (!fs.existsSync(SSL_CERT_FILE) || !fs.existsSync(SSL_KEY_FILE)) {
       throw new Error(`HTTPS certificate files not found: ${SSL_CERT_FILE}, ${SSL_KEY_FILE}`);
     }
-
     server = https.createServer({
       cert: fs.readFileSync(SSL_CERT_FILE),
       key: fs.readFileSync(SSL_KEY_FILE)
@@ -145,7 +144,6 @@ function getRoomBySocket(socket) {
   return null;
 }
 
-// 定期清理空房间和超时断线玩家
 setInterval(() => {
   const now = Date.now();
   for (const roomId in rooms) {
@@ -159,7 +157,7 @@ setInterval(() => {
           username: disconnected.player?.name,
           roomId,
           roomName: room.name,
-          role: disconnected.player?.isSpectator ? 'spectator' : 'player',
+          role: disconnected.player?.isSpectator ? 'spectator' : (disconnected.player?.isReferee ? 'referee' : 'player'),
           socketId: id,
           reason: 'disconnect_timeout',
           duration: formatDuration(now - (disconnected.player?.joinedAt || disconnected.disconnectTime))
@@ -190,14 +188,25 @@ setInterval(() => {
 }, 60000);
 
 function getActivePlayers(room) {
-  return room.players.filter(p => !p.isSpectator && !room.disconnectedPlayers[p.id]);
+  return room.players.filter(p => !p.isSpectator && !p.isReferee && !room.disconnectedPlayers[p.id]);
 }
 
 function getHostId(room) {
   const active = getActivePlayers(room);
-  if (room.hostId && active.some(p => p.id === room.hostId)) return room.hostId;
-  room.hostId = active.length > 0 ? active[0].id : null;
+  if (room.hostId && room.players.some(p => p.id === room.hostId && !room.disconnectedPlayers[p.id])) return room.hostId;
+  if (!room.hostId || !room.players.some(p => p.id === room.hostId)) {
+    room.hostId = active.length > 0 ? active[0].id : null;
+  }
   return room.hostId;
+}
+
+function getMainWord(fullWord) {
+  if (!fullWord) return '';
+  return fullWord.includes('/') ? fullWord.split('/')[0] : fullWord;
+}
+
+function getWordLength(fullWord) {
+  return getMainWord(fullWord).length;
 }
 
 function getRandomWords(room, count) {
@@ -206,12 +215,10 @@ function getRandomWords(room, count) {
   return shuffled.slice(0, Math.min(count, shuffled.length));
 }
 
-// 规范化答案：去除所有空格并转小写
 function normalizeAnswer(text) {
   return text.replace(/\s+/g, '').toLowerCase();
 }
 
-// 检查答案是否匹配当前词（支持别名）
 function isWordMatched(message, currentWord) {
   const normalizedMsg = normalizeAnswer(message);
   const aliases = currentWord.split('/');
@@ -220,12 +227,40 @@ function isWordMatched(message, currentWord) {
 
 // ========== 游戏流程 ==========
 function startGame(room, socket) {
-  if (room.gameState === 'finished') return;
+  // 允许从 finished 状态重新开始游戏
+  if (room.gameState === 'finished') {
+    // 重置房间状态
+    clearInterval(room.timerInterval);
+    room.currentRound = 1;
+    room.currentDrawerIndex = 0;
+    room.scores = {};
+    room.canvasHistory = [];
+    room.spectatorCorrectCounts = {};
+    room.gameState = 'waiting'; // 先设为 waiting，后续会改为 selectingWord
+    room.guessedPlayers = [];
+    room.currentSpectatorGuessed = new Set();
+    // 移除所有离线玩家的残留数据
+    for (const id in room.disconnectedPlayers) {
+      delete room.scores[id];
+      delete room.spectatorCorrectCounts[id];
+      delete room.playerTokens[id];
+      room.players = room.players.filter(p => p.id !== id);
+    }
+    room.disconnectedPlayers = {};
+    // 重新初始化分数
+    getActivePlayers(room).forEach(p => room.scores[p.id] = 0);
+    for (const p of room.players) {
+      if (p.isReferee) {
+        delete room.scores[p.id];
+        delete room.spectatorCorrectCounts[p.id];
+      }
+    }
+  }
+
   const active = getActivePlayers(room);
-  
   if (active.length < 2) {
     if (socket) {
-      socket.emit('errorMessage', '人数不足！至少需要 2 名非观战玩家才能开始游戏。');
+      socket.emit('errorMessage', '人数不足！至少需要 2 名非裁判非观战玩家才能开始游戏。');
     }
     return;
   }
@@ -237,6 +272,12 @@ function startGame(room, socket) {
   room.canvasHistory = [];
   room.spectatorCorrectCounts = {};
   active.forEach(p => room.scores[p.id] = 0);
+  for (const p of room.players) {
+    if (p.isReferee) {
+      delete room.scores[p.id];
+      delete room.spectatorCorrectCounts[p.id];
+    }
+  }
 
   io.to(room.id).emit('gameStarted', {
     settings: room.gameSettings, players: room.players, scores: room.scores, hostId: getHostId(room)
@@ -256,7 +297,8 @@ function startWordSelection(room) {
 
   while (room.currentDrawerIndex < room.players.length &&
     (room.disconnectedPlayers[room.players[room.currentDrawerIndex].id] ||
-      room.players[room.currentDrawerIndex].isSpectator)) {
+      room.players[room.currentDrawerIndex].isSpectator ||
+      room.players[room.currentDrawerIndex].isReferee)) {
     room.currentDrawerIndex++;
   }
 
@@ -282,7 +324,6 @@ function startWordSelection(room) {
     currentTimer: room.timer
   });
 
-  // 发送给画手时，只显示每个词的主名称（第一个/之前的部分）
   const wordChoices = wordOptions.map(full => ({
     display: full.includes('/') ? full.split('/')[0] : full,
     full
@@ -311,6 +352,7 @@ function selectWord(room, word) {
 
   const drawerId = room.players[room.currentDrawerIndex].id;
   const drawerName = room.players[room.currentDrawerIndex].name;
+  const wordLength = getWordLength(word);
 
   room.players.forEach(p => {
     if (room.disconnectedPlayers[p.id]) return;
@@ -318,13 +360,22 @@ function selectWord(room, word) {
       io.to(p.id).emit('roundStart', {
         round: room.currentRound, totalRounds: room.gameSettings.totalRounds,
         drawerId, drawerName, word: room.currentWord,
-        isDrawer: true, isSpectator: false, currentTimer: room.timer, canvasHistory: room.canvasHistory
+        isDrawer: true, isSpectator: false, isReferee: false, currentTimer: room.timer, canvasHistory: room.canvasHistory,
+        wordLength
+      });
+    } else if (p.isReferee) {
+      io.to(p.id).emit('roundStart', {
+        round: room.currentRound, totalRounds: room.gameSettings.totalRounds,
+        drawerId, drawerName, word: room.currentWord,
+        isDrawer: false, isSpectator: false, isReferee: true, currentTimer: room.timer, canvasHistory: room.canvasHistory,
+        wordLength
       });
     } else {
       io.to(p.id).emit('roundStart', {
         round: room.currentRound, totalRounds: room.gameSettings.totalRounds,
         drawerId, drawerName, word: '',
-        isDrawer: false, isSpectator: p.isSpectator, currentTimer: room.timer, canvasHistory: room.canvasHistory
+        isDrawer: false, isSpectator: p.isSpectator, isReferee: false, currentTimer: room.timer, canvasHistory: room.canvasHistory,
+        wordLength
       });
     }
   });
@@ -339,20 +390,36 @@ function selectWord(room, word) {
   }, 1000);
 }
 
-function endTurn(room) {
+function endTurn(room, penalize = false) {
   if (room.gameState === 'finished') return;
   clearInterval(room.timerInterval);
 
   const drawer = room.players[room.currentDrawerIndex];
-  const n = room.guessedPlayers.length;
-  const drawerScore = n * (n + 1) / 2;
-  if (drawer && room.scores[drawer.id] !== undefined) {
-    room.scores[drawer.id] += drawerScore;
+  let drawerScore = 0;
+  let adjustedScores = { ...room.scores };
+
+  if (!penalize) {
+    const n = room.guessedPlayers.length;
+    drawerScore = n * (n + 1) / 2;
+    if (drawer && adjustedScores[drawer.id] !== undefined) {
+      adjustedScores[drawer.id] = (adjustedScores[drawer.id] || 0) + drawerScore;
+    }
+  } else {
+    const activeCount = getActivePlayers(room).length;
+    room.guessedPlayers.forEach((pId, index) => {
+      const guessScore = activeCount - 1 - index;
+      if (adjustedScores[pId] !== undefined) {
+        adjustedScores[pId] = Math.max(0, (adjustedScores[pId] || 0) - guessScore);
+      }
+    });
   }
+
+  room.scores = adjustedScores;
 
   io.to(room.id).emit('turnEnd', {
     word: room.currentWord, guessedPlayers: room.guessedPlayers,
-    drawerScore, scores: room.scores
+    drawerScore: penalize ? 0 : drawerScore, scores: room.scores,
+    penalized: penalize
   });
 
   room.currentDrawerIndex++;
@@ -369,7 +436,7 @@ function endGame(room) {
 
   const onlinePlayers = room.players.filter(p => !room.disconnectedPlayers[p.id]);
   const playerRankings = onlinePlayers
-    .filter(p => !p.isSpectator)
+    .filter(p => !p.isSpectator && !p.isReferee)
     .map(p => ({ id: p.id, name: p.name, score: room.scores[p.id] || 0 }))
     .sort((a, b) => b.score - a.score);
 
@@ -399,6 +466,12 @@ function restartGame(room) {
   room.canvasHistory = [];
   room.spectatorCorrectCounts = {};
   getActivePlayers(room).forEach(p => room.scores[p.id] = 0);
+  for (const p of room.players) {
+    if (p.isReferee) {
+      delete room.scores[p.id];
+      delete room.spectatorCorrectCounts[p.id];
+    }
+  }
 
   io.to(room.id).emit('gameRestarted', {
     players: room.players,
@@ -414,13 +487,13 @@ function restartGame(room) {
 function getRoomListForBroadcast() {
   return Object.values(rooms).map(room => ({
     id: room.id, name: room.name,
-    playerCount: room.players.filter(p => !p.isSpectator && !room.disconnectedPlayers[p.id]).length,
+    playerCount: room.players.filter(p => !p.isSpectator && !p.isReferee && !room.disconnectedPlayers[p.id]).length,
     spectatorCount: room.players.filter(p => p.isSpectator && !room.disconnectedPlayers[p.id]).length,
+    refereeCount: room.players.filter(p => p.isReferee && !room.disconnectedPlayers[p.id]).length,
     gameState: room.gameState
   }));
 }
 
-// 移除玩家
 function removePlayerFromRoom(socket, room, isDisconnect = false) {
   const idx = room.players.findIndex(p => p.id === socket.id);
   if (idx === -1) return;
@@ -431,7 +504,7 @@ function removePlayerFromRoom(socket, room, isDisconnect = false) {
     username: player.name,
     roomId: room.id,
     roomName: room.name,
-    role: player.isSpectator ? 'spectator' : 'player',
+    role: player.isSpectator ? 'spectator' : (player.isReferee ? 'referee' : 'player'),
     socketId: socket.id,
     reason: isDisconnect ? 'socket_disconnect' : 'leave_room',
     duration: formatDuration(eventAt - (player.joinedAt || eventAt))
@@ -508,13 +581,13 @@ io.on('connection', (socket) => {
         username: room.players[playerIndex].name,
         roomId: room.id,
         roomName: room.name,
-        role: room.players[playerIndex].isSpectator ? 'spectator' : 'player',
+        role: room.players[playerIndex].isSpectator ? 'spectator' : (room.players[playerIndex].isReferee ? 'referee' : 'player'),
         socketId: socket.id,
         reason: 'reconnect_success',
         duration: formatDuration(Date.now() - (room.players[playerIndex].joinedAt || Date.now()))
       });
 
-      if (!player.isSpectator) room.scores[socket.id] = oldScores || 0;
+      if (!player.isSpectator && !player.isReferee) room.scores[socket.id] = oldScores || 0;
       delete room.scores[oldId];
       if (player.isSpectator) room.spectatorCorrectCounts[socket.id] = oldSpectatorCorrectCount || 0;
       delete room.spectatorCorrectCounts[oldId];
@@ -542,6 +615,8 @@ io.on('connection', (socket) => {
         isCurrentDrawer: playerIndex === room.currentDrawerIndex
       });
 
+      const isDrawer = room.players[room.currentDrawerIndex]?.id === socket.id;
+      const isReferee = room.players[playerIndex]?.isReferee || false;
       socket.emit('reconnectSuccess', {
         player: room.players[playerIndex],
         gameState: room.gameState,
@@ -553,15 +628,17 @@ io.on('connection', (socket) => {
         totalRounds: room.gameSettings.totalRounds,
         currentDrawer: room.players[room.currentDrawerIndex]?.name || '',
         currentDrawerId: room.players[room.currentDrawerIndex]?.id || '',
-        currentWord: (room.gameState === 'playing' && room.players[room.currentDrawerIndex]?.id === socket.id) ? room.currentWord : '',
+        currentWord: (isDrawer || isReferee) ? room.currentWord : '',
         currentTimer: room.timer,
-        isDrawer: room.players[room.currentDrawerIndex]?.id === socket.id,
+        isDrawer,
         isSpectator: player.isSpectator,
+        isReferee,
         hasCustomWords: room.customWords.length > 0,
         wordCount: room.customWords.length,
         canvasHistory: room.canvasHistory,
         roomId: room.id,
-        reconnectToken: newReconnectToken
+        reconnectToken: newReconnectToken,
+        wordLength: getWordLength(room.currentWord)
       });
     }
   });
@@ -574,7 +651,7 @@ io.on('connection', (socket) => {
 
     const roomId = createRoom(roomName);
     const reconnectToken = createReconnectToken();
-    const player = { id: socket.id, name: playerName, isSpectator: false, joinedAt: Date.now() };
+    const player = { id: socket.id, name: playerName, isSpectator: false, isReferee: false, joinedAt: Date.now() };
     rooms[roomId].players.push(player);
     rooms[roomId].hostId = socket.id;
     rooms[roomId].scores[socket.id] = 0;
@@ -626,7 +703,7 @@ io.on('connection', (socket) => {
       return;
     }
 
-    const player = { id: socket.id, name: playerName, isSpectator: asSpectator, joinedAt: Date.now() };
+    const player = { id: socket.id, name: playerName, isSpectator: asSpectator, isReferee: false, joinedAt: Date.now() };
     const reconnectToken = createReconnectToken();
     room.players.push(player);
     if (!asSpectator) room.scores[socket.id] = 0;
@@ -635,13 +712,13 @@ io.on('connection', (socket) => {
 
     socket.join(roomId);
     if (asSpectator) socket.join(roomId + ':spectators');
-    getHostId(room);
+    const hostId = getHostId(room);
 
     const eventName = asSpectator ? 'spectatorJoined' : 'playerJoined';
     io.to(roomId).emit(eventName, {
       player,
       players: room.players.filter(p => !room.disconnectedPlayers[p.id]),
-      hostId: getHostId(room),
+      hostId,
       ...(asSpectator ? {} : { hasCustomWords: room.customWords.length > 0, wordCount: room.customWords.length })
     });
 
@@ -649,12 +726,14 @@ io.on('connection', (socket) => {
       gameState: room.gameState,
       players: room.players.filter(p => !room.disconnectedPlayers[p.id]),
       settings: room.gameSettings,
-      isHost: getHostId(room) === socket.id,
+      isHost: hostId === socket.id,
       hasCustomWords: room.customWords.length > 0,
       wordCount: room.customWords.length,
       roomId: room.id,
-      reconnectToken
+      reconnectToken,
+      playerId: socket.id
     });
+
     socket.emit('reconnectInfo', { roomId: room.id, playerId: socket.id, reconnectToken });
     logPlayerActivity('login', {
       username: player.name,
@@ -666,6 +745,7 @@ io.on('connection', (socket) => {
     });
 
     if (room.gameState === 'playing' || room.gameState === 'selectingWord') {
+      const isDrawerNow = room.players[room.currentDrawerIndex]?.id === socket.id;
       socket.emit('gameInProgress', {
         gameState: room.gameState,
         currentRound: room.currentRound,
@@ -674,7 +754,11 @@ io.on('connection', (socket) => {
         currentDrawerId: room.players[room.currentDrawerIndex]?.id || '',
         currentTimer: room.timer,
         canvasHistory: room.canvasHistory,
-        isSpectator: asSpectator
+        isSpectator: asSpectator,
+        isDrawer: isDrawerNow,
+        isReferee: false,
+        wordLength: getWordLength(room.currentWord),
+        playerId: socket.id
       });
     }
 
@@ -690,23 +774,28 @@ io.on('connection', (socket) => {
     const room = getRoomBySocket(socket);
     if (!room) return;
     const idx = room.players.findIndex(p => p.id === socket.id);
-    if (idx === -1 || room.players[idx].isSpectator) return;
+    if (idx === -1) return;
+    const player = room.players[idx];
+    if (player.isSpectator) return;
 
     const wasHost = (socket.id === room.hostId);
-    room.players[idx].isSpectator = true;
+    const wasReferee = player.isReferee;
+    player.isSpectator = true;
+    player.isReferee = false;
     delete room.scores[socket.id];
     room.spectatorCorrectCounts[socket.id] = 0;
     socket.join(room.id + ':spectators');
 
-    if (wasHost) {
+    if (wasHost && wasReferee) {
       room.hostId = null;
       getHostId(room);
     }
 
     io.to(room.id).emit('playerSwitched', {
-      player: room.players[idx],
+      player,
       players: room.players.filter(p => !room.disconnectedPlayers[p.id]),
       isNowPlayer: false,
+      isNowReferee: false,
       hostId: getHostId(room)
     });
   });
@@ -715,17 +804,48 @@ io.on('connection', (socket) => {
     const room = getRoomBySocket(socket);
     if (!room) return;
     const idx = room.players.findIndex(p => p.id === socket.id);
-    if (idx === -1 || !room.players[idx].isSpectator) return;
+    if (idx === -1) return;
+    const player = room.players[idx];
+    if (!player.isSpectator && !player.isReferee) return;
 
-    room.players[idx].isSpectator = false;
+    const wasReferee = player.isReferee;
+    player.isSpectator = false;
+    player.isReferee = false;
     room.scores[socket.id] = 0;
     socket.leave(room.id + ':spectators');
-    if (!room.hostId) room.hostId = socket.id;
+    if (!room.hostId || (wasReferee && room.hostId === socket.id)) {
+      room.hostId = socket.id;
+    }
 
     io.to(room.id).emit('playerSwitched', {
-      player: room.players[idx],
+      player,
       players: room.players.filter(p => !room.disconnectedPlayers[p.id]),
       isNowPlayer: true,
+      isNowReferee: false,
+      hostId: getHostId(room)
+    });
+  });
+
+  socket.on('switchToReferee', () => {
+    const room = getRoomBySocket(socket);
+    if (!room || getHostId(room) !== socket.id) return;
+    const idx = room.players.findIndex(p => p.id === socket.id);
+    if (idx === -1) return;
+    const player = room.players[idx];
+    if (player.isReferee) return;
+
+    const wasSpectator = player.isSpectator;
+    player.isReferee = true;
+    player.isSpectator = false;
+    delete room.scores[socket.id];
+    delete room.spectatorCorrectCounts[socket.id];
+    if (wasSpectator) socket.leave(room.id + ':spectators');
+
+    io.to(room.id).emit('playerSwitched', {
+      player,
+      players: room.players.filter(p => !room.disconnectedPlayers[p.id]),
+      isNowPlayer: false,
+      isNowReferee: true,
       hostId: getHostId(room)
     });
   });
@@ -776,7 +896,15 @@ io.on('connection', (socket) => {
     }
   });
 
-  // 笔画开始标记
+  socket.on('forceEndTurn', () => {
+    const room = getRoomBySocket(socket);
+    if (!room || room.gameState !== 'playing') return;
+    const player = room.players.find(p => p.id === socket.id);
+    if (!player || !player.isReferee) return;
+    clearInterval(room.timerInterval);
+    endTurn(room, true);
+  });
+
   socket.on('startStroke', () => {
     const room = getRoomBySocket(socket);
     if (!room) return;
@@ -784,7 +912,6 @@ io.on('connection', (socket) => {
     socket.broadcast.to(room.id).emit('startStroke');
   });
 
-  // 笔画结束标记
   socket.on('endStroke', () => {
     const room = getRoomBySocket(socket);
     if (!room) return;
@@ -811,7 +938,6 @@ io.on('connection', (socket) => {
     if (!room || room.players[room.currentDrawerIndex]?.id !== socket.id) return;
     if (room.canvasHistory.length === 0) return;
 
-    // 撤回一整笔：若末尾是 fill 直接移除；若是 endStroke 则一直移除直到 startStroke（含）
     const history = room.canvasHistory;
     let popped = false;
     const last = history[history.length - 1];
@@ -820,7 +946,7 @@ io.on('connection', (socket) => {
       history.pop();
       popped = true;
     } else if (last.type === 'endStroke') {
-      history.pop(); // 移除 endStroke
+      history.pop();
       while (history.length > 0 && history[history.length - 1].type !== 'startStroke') {
         history.pop();
       }
@@ -848,13 +974,16 @@ io.on('connection', (socket) => {
     const player = room.players.find(p => p.id === socket.id);
     if (!player) return;
 
-    // 画手也可以发言（直接广播，不检查答案）
+    if (player.isReferee) {
+      io.to(room.id).emit('chat', { name: player.name, message, isReferee: true });
+      return;
+    }
+
     if (room.gameState === 'playing' && room.players[room.currentDrawerIndex]?.id === socket.id) {
       io.to(room.id).emit('chat', { name: player.name, message });
       return;
     }
 
-    // 检查是否猜中词语（忽略空格、大小写，支持别名）
     if (room.gameState === 'playing' && isWordMatched(message, room.currentWord)) {
       if (!player.isSpectator) {
         if (!room.guessedPlayers.includes(socket.id)) {
@@ -889,7 +1018,6 @@ io.on('connection', (socket) => {
       return;
     }
 
-    // 普通聊天消息
     if (player.isSpectator) {
       io.to(room.id + ':spectators').emit('chat', { name: player.name, message, spectatorChat: true });
     } else {
