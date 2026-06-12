@@ -5,7 +5,6 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
   <title>你画我猜</title>
   <script src="https://cdn.tailwindcss.com"></script>
-  <!-- 引入 SheetJS 用于处理 Excel 文件 -->
   <script src="https://cdn.sheetjs.com/xlsx-0.20.0/package/dist/xlsx.full.min.js"></script>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -199,7 +198,7 @@
 
 <div id="nicknameScreen" class="flex items-center justify-center min-h-screen p-4">
   <div class="bg-white rounded-2xl shadow-2xl p-8 max-w-md w-full">
-    <h1 class="text-3xl font-bold text-center mb-8">🎨 你画我猜</h1>
+    <h1 class="text-3xl font-bold text-center mb-8">你画我猜</h1>
     <input type="text" id="nicknameInput" placeholder="请输入昵称..." class="w-full px-4 py-3 border border-gray-300 rounded-lg mb-4">
     <button id="confirmNicknameBtn" class="w-full bg-gradient-to-r from-blue-500 to-purple-500 text-white font-medium py-3 rounded-lg btn-hover">进入游戏大厅</button>
   </div>
@@ -208,14 +207,14 @@
 <div id="lobbyScreen" class="hidden min-h-screen p-6">
   <div class="max-w-4xl mx-auto">
     <div class="flex justify-between items-center mb-8">
-      <h1 class="text-3xl font-bold">🎨 游戏大厅</h1>
+      <h1 class="text-3xl font-bold">游戏大厅</h1>
       <div>
         <span class="text-gray-600" id="lobbyNickname"></span>
         <button id="logoutBtn" class="ml-4 px-4 py-2 bg-gray-200 rounded-lg btn-hover">退出</button>
       </div>
     </div>
     <div class="flex gap-4 mb-8">
-      <input type="text" id="roomNameInput" placeholder="房间名称（可选）" class="flex-1 px-4 py-3 border rounded-lg">
+      <input type="text" id="roomNameInput" placeholder="输入房间名称（可选）" class="flex-1 px-4 py-3 border rounded-lg">
       <button id="createRoomBtn" class="px-6 py-3 bg-blue-500 text-white rounded-lg btn-hover">创建房间</button>
     </div>
     <div class="bg-white rounded-xl shadow-lg p-6">
@@ -239,11 +238,11 @@
       <div id="playerListWaiting" class="mb-6 max-h-40 overflow-y-auto space-y-2"></div>
       <div id="hostSettings" class="hidden mb-6 p-4 bg-gray-50 rounded-lg">
         <h3 class="font-medium mb-3">游戏设置</h3>
-        <div class="mb-3"><label class="text-sm">绘画时间(秒)</label><input type="number" id="drawTimeInput" min="30" max="360" value="120" class="w-full px-3 py-2 border rounded"></div>
+        <div class="mb-3"><label class="text-sm">绘画时间(秒)</label><input type="number" id="drawTimeInput" min="30" max="360" value="60" class="w-full px-3 py-2 border rounded"></div>
         <div class="mb-3"><label class="text-sm">选题时间(秒)</label><input type="number" id="selectTimeInput" min="10" max="30" value="15" class="w-full px-3 py-2 border rounded"></div>
         <div class="mb-3"><label class="text-sm">总轮数</label><input type="number" id="roundsInput" min="1" max="10" value="3" class="w-full px-3 py-2 border rounded"></div>
         <div class="mb-3">
-          <label class="text-sm">导入词库(TXT/Excel)</label>
+          <label class="text-sm">导入词库(txt/Excel)</label>
           <div class="file-upload w-full">
             <button class="w-full bg-blue-100 text-blue-700 py-2 rounded">选择文件</button>
             <input type="file" id="wordFileInput" accept=".txt,.xlsx,.xls">
@@ -251,8 +250,9 @@
           <p id="wordCountText" class="text-xs text-gray-500 mt-1">系统默认词库</p>
         </div>
       </div>
-      <div class="flex gap-3 mb-3">
+      <div class="flex gap-3 mb-3 flex-wrap">
         <button id="toggleRoleBtn" class="flex-1 bg-indigo-100 text-indigo-700 py-3 rounded-lg btn-hover">切换为观众</button>
+        <button id="toggleRefereeBtn" class="hidden flex-1 bg-orange-100 text-orange-700 py-3 rounded-lg btn-hover">成为裁判</button>
         <button id="startGameBtn" class="hidden flex-1 bg-gradient-to-r from-green-500 to-emerald-500 text-white py-3 rounded-lg btn-hover">开始游戏</button>
       </div>
       <button id="leaveRoomBtn" class="w-full bg-red-100 text-red-700 py-3 rounded-lg btn-hover">离开房间</button>
@@ -279,7 +279,8 @@
           <span class="text-gray-600">当前画手: <span id="currentDrawer" class="font-bold text-purple-600">-</span></span>
         </div>
         <div class="flex items-center gap-4">
-          <button id="forceEndBtn" class="hidden px-4 py-2 bg-red-100 text-red-600 border border-red-300 rounded-lg btn-hover text-sm font-bold">强制结束</button>
+          <button id="forceEndTurnBtn" class="hidden px-4 py-2 bg-orange-100 text-orange-600 border border-orange-300 rounded-lg btn-hover text-sm font-bold">强制结束本轮绘画</button>
+          <button id="forceEndBtn" class="hidden px-4 py-2 bg-red-100 text-red-600 border border-red-300 rounded-lg btn-hover text-sm font-bold">强制结束游戏</button>
           <div class="game-timer text-2xl font-bold">倒计时: <span id="timer" class="text-red-500">60</span>秒</div>
         </div>
       </div>
@@ -289,7 +290,7 @@
     <div id="gameLayout" class="flex flex-col lg:flex-row gap-4">
       <div id="playersColumn" class="lg:w-1/5 order-2 lg:order-1">
         <div id="playersPanel" class="bg-white rounded-xl shadow-lg p-4 mb-4">
-          <h3 class="font-bold text-gray-700 mb-3">玩家列表</h3>
+          <h3 class="font-bold text-gray-700 mb-3">🏆 玩家列表</h3>
           <div id="playerScores" class="space-y-2"></div>
         </div>
       </div>
@@ -327,7 +328,7 @@
 
       <div id="chatColumn" class="lg:w-1/5 order-3">
         <div id="chatPanel" class="bg-white rounded-xl shadow-lg p-4 h-full flex flex-col">
-          <h3 class="font-bold text-gray-700 mb-3">聊天</h3>
+          <h3 class="font-bold text-gray-700 mb-3">💬 聊天</h3>
           <div id="chat" class="flex-1 overflow-y-auto mb-4 space-y-2 max-h-96"></div>
           <input type="text" id="chatInput" placeholder="输入消息..." class="w-full px-4 py-3 border rounded-lg">
         </div>
@@ -338,7 +339,7 @@
 
 <div id="endScreen" class="hidden flex items-center justify-center min-h-screen p-4">
   <div class="bg-white rounded-2xl shadow-2xl p-8 max-w-lg w-full text-center">
-    <h1 class="text-3xl font-bold mb-6">游戏结束！</h1>
+    <h1 class="text-3xl font-bold mb-6">🎉 游戏结束！</h1>
     <div id="rankingsContainer" class="mb-6"></div>
     <div id="spectatorRankingsContainer" class="mb-6 border-t pt-4 hidden"></div>
     <div class="flex flex-col gap-3">
@@ -363,7 +364,6 @@
 
 <script src="/socket.io/socket.io.js"></script>
 <script>
-  // 防抖函数
   function debounce(func, wait) {
     let timeout;
     return function(...args) {
@@ -392,20 +392,18 @@
   }
   const socket = io({ reconnection: true, reconnectionAttempts: 10, reconnectionDelay: 1000 });
 
-  // 用户状态
   let myId = '', myName = '', currentRoomId = '', isHost = false, isSpectator = false;
   let isDrawer = false, isDrawing = false, lastX = 0, lastY = 0;
   let currentColor = '#000000', isEraser = false;
   let isFillMode = false;
-  let currentTool = 'pen';   // 'pen', 'eraser', 'fill'
+  let currentTool = 'pen';
   let players = [], scores = {}, gameInProgress = false;
   let currentDrawerId = '';
   let localCanvasHistory = [];
+  let isReferee = false;
 
-  // 重名重试临时变量
   let pendingJoinRoomId = '', pendingJoinAsSpectator = false;
 
-  // DOM 快捷选择
   const $ = (id) => document.getElementById(id);
   const nicknameScreen = $('nicknameScreen'), lobbyScreen = $('lobbyScreen');
   const waitingScreen = $('waitingScreen'), gameScreen = $('gameScreen'), endScreen = $('endScreen');
@@ -419,6 +417,7 @@
   const hostSettings = $('hostSettings'), drawTimeInput = $('drawTimeInput'), selectTimeInput = $('selectTimeInput');
   const roundsInput = $('roundsInput'), wordFileInput = $('wordFileInput'), wordCountText = $('wordCountText');
   const startGameBtn = $('startGameBtn'), toggleRoleBtn = $('toggleRoleBtn'), leaveRoomBtn = $('leaveRoomBtn');
+  const toggleRefereeBtn = $('toggleRefereeBtn');
   const wordSelectTimer = $('wordSelectTimer'), wordOptions = $('wordOptions');
   const canvas = $('canvas'), ctx = canvas.getContext('2d');
   const tools = $('tools');
@@ -429,13 +428,12 @@
   const penBtn = $('penBtn'), eraserBtn = $('eraserBtn'), fillBtn = $('fillBtn'), undoBtn = $('undoBtn'), clearBtn = $('clearBtn');
   const brushSize = $('brushSize'), brushSizeValue = $('brushSizeValue');
   const eraserSize = $('eraserSize'), eraserSizeValue = $('eraserSizeValue');
-  const forceEndBtn = $('forceEndBtn');
+  const forceEndBtn = $('forceEndBtn'), forceEndTurnBtn = $('forceEndTurnBtn');
   const rankingsContainer = $('rankingsContainer'), spectatorRankingsContainer = $('spectatorRankingsContainer');
   const playAgainBtn = $('playAgainBtn'), switchToSpectatorBtn = $('switchToSpectatorBtn'), leaveEndBtn = $('leaveEndBtn');
   const renameMessage = $('renameMessage'), renameInput = $('renameInput');
   const confirmRenameBtn = $('confirmRenameBtn'), cancelRenameBtn = $('cancelRenameBtn');
 
-  // 界面切换
   function hideAll() {
     [nicknameScreen, lobbyScreen, waitingScreen, gameScreen, endScreen].forEach(el => el.classList.add('hidden'));
   }
@@ -449,6 +447,7 @@
     roomTitle.textContent = roomName || '房间: ' + roomId;
     roomIdDisplay.textContent = roomId;
     waitingStatus.textContent = '等待房主开始新游戏...';
+    updateRefereeButton();
   }
   function showGame() { hideAll(); gameScreen.classList.remove('hidden'); resizeCanvas(); }
   function showEndScreen() { hideAll(); endScreen.classList.remove('hidden'); }
@@ -458,7 +457,29 @@
     else forceEndBtn.classList.add('hidden');
   }
 
-  // 画布辅助
+  function updateRefereeButton() {
+    if (!isHost || gameInProgress) {
+      toggleRefereeBtn.classList.add('hidden');
+    } else {
+      if (isReferee) {
+        toggleRefereeBtn.textContent = '取消裁判';
+      } else {
+        toggleRefereeBtn.textContent = '成为裁判';
+      }
+      toggleRefereeBtn.classList.remove('hidden');
+    }
+    if (isReferee) {
+      toggleRoleBtn.textContent = '切换为玩家';
+      toggleRoleBtn.classList.remove('hidden');
+    } else if (isSpectator) {
+      toggleRoleBtn.textContent = '切换为玩家';
+      toggleRoleBtn.classList.remove('hidden');
+    } else {
+      toggleRoleBtn.textContent = '切换为观众';
+      toggleRoleBtn.classList.remove('hidden');
+    }
+  }
+
   function resizeCanvas() {
     const container = canvas.parentElement;
     const maxWidth = container.clientWidth - 16;
@@ -478,20 +499,21 @@
 
   function addChatMessage(data) {
     const div = document.createElement('div');
-    div.className = 'message-enter p-2 rounded-lg ' + 
-      (data.isSystem ? 'bg-green-50 text-green-700' : (data.spectatorChat ? 'bg-purple-50 text-purple-700' : 'bg-gray-50'));
+    let bgClass = 'bg-gray-50';
+    if (data.isSystem) bgClass = 'bg-green-50 text-green-700';
+    else if (data.spectatorChat) bgClass = 'bg-purple-50 text-purple-700';
+    else if (data.isReferee) bgClass = 'bg-orange-50 text-orange-700';
+    div.className = `message-enter p-2 rounded-lg ${bgClass}`;
     div.innerHTML = `<span class="font-medium">${data.name}:</span> ${data.message}`;
     chat.appendChild(div); chat.scrollTop = chat.scrollHeight;
   }
 
-  // 填充算法
   function floodFill(context, startX, startY, fillColor) {
     const imageData = context.getImageData(0, 0, canvas.width, canvas.height);
     const data = imageData.data;
     const w = canvas.width, h = canvas.height;
     const startPos = (Math.floor(startY) * w + Math.floor(startX)) * 4;
     const startR = data[startPos], startG = data[startPos+1], startB = data[startPos+2], startA = data[startPos+3];
-
     const tempCanvas = document.createElement('canvas');
     tempCanvas.width = 1; tempCanvas.height = 1;
     const tempCtx = tempCanvas.getContext('2d');
@@ -499,13 +521,10 @@
     tempCtx.fillRect(0,0,1,1);
     const fillImageData = tempCtx.getImageData(0,0,1,1);
     const fillR = fillImageData.data[0], fillG = fillImageData.data[1], fillB = fillImageData.data[2], fillA = fillImageData.data[3];
-
     if (startR === fillR && startG === fillG && startB === fillB && startA === fillA) return;
-
     const stack = [[Math.floor(startX), Math.floor(startY)]];
     const visited = new Set();
     const getKey = (x, y) => `${x},${y}`;
-
     while (stack.length) {
       const [x, y] = stack.pop();
       const key = getKey(x, y);
@@ -513,7 +532,6 @@
       if (x < 0 || x >= w || y < 0 || y >= h) continue;
       const pos = (y * w + x) * 4;
       if (data[pos] !== startR || data[pos+1] !== startG || data[pos+2] !== startB || data[pos+3] !== startA) continue;
-
       visited.add(key);
       data[pos] = fillR; data[pos+1] = fillG; data[pos+2] = fillB; data[pos+3] = fillA;
       stack.push([x+1, y], [x-1, y], [x, y+1], [x, y-1]);
@@ -521,7 +539,6 @@
     context.putImageData(imageData, 0, 0);
   }
 
-  // 重绘整个画布（忽略 startStroke / endStroke）
   function redrawCanvasFromHistory(history) {
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     history.forEach(action => {
@@ -578,15 +595,22 @@
     canvas.style.cursor = '';
   }
 
-  // 更新等待界面玩家列表
+  function updateMyStateFromPlayers(playersArray) {
+    const me = playersArray.find(p => p.id === myId);
+    if (me) {
+      isSpectator = me.isSpectator || false;
+      isReferee = me.isReferee || false;
+    }
+  }
+
   function updatePlayerListWaiting(data) {
-    const active = data.players.filter(p => !p.isSpectator);
+    updateMyStateFromPlayers(data.players);
+    const active = data.players.filter(p => !p.isSpectator && !p.isReferee);
     const spectators = data.players.filter(p => p.isSpectator);
     playerCount.textContent = active.length;
     spectatorCount.textContent = spectators.length;
-
     isHost = (data.hostId === myId);
-    toggleRoleBtn.textContent = isSpectator ? '切换为玩家' : '切换为观众';
+    updateRefereeButton();
     if (isHost && !isSpectator) {
       hostSettings.classList.remove('hidden');
       startGameBtn.classList.toggle('hidden', active.length < 2);
@@ -594,23 +618,22 @@
       hostSettings.classList.add('hidden');
       startGameBtn.classList.add('hidden');
     }
-
     playerListWaiting.innerHTML = '';
     data.players.forEach(p => {
       const div = document.createElement('div');
       div.className = 'p-2 bg-gray-50 rounded-lg flex items-center';
       let badge = '';
-      if (p.id === data.hostId && !p.isSpectator) badge = '<span class="ml-auto text-xs bg-yellow-100 text-yellow-800 px-2 py-1 rounded font-bold">房主</span>';
+      if (p.isReferee) badge = '<span class="ml-auto text-xs bg-orange-100 text-orange-700 px-2 py-1 rounded font-bold">裁判</span>';
+      else if (p.id === data.hostId && !p.isSpectator) badge = '<span class="ml-auto text-xs bg-yellow-100 text-yellow-800 px-2 py-1 rounded font-bold">房主</span>';
       else if (p.isSpectator) badge = '<span class="ml-auto text-xs bg-gray-100 text-gray-600 px-2 py-1 rounded">观众</span>';
       div.innerHTML = `<span class="w-2 h-2 bg-green-500 rounded-full mr-2"></span><span>${p.name}</span>${badge}`;
       playerListWaiting.appendChild(div);
     });
   }
 
-  // 游戏内玩家列表
   function updateScoreList(sc, plist) {
     playerScores.innerHTML = '';
-    plist.filter(p => !p.isSpectator).sort((a,b) => (sc[b.id]||0)-(sc[a.id]||0)).forEach(p => {
+    plist.filter(p => !p.isSpectator && !p.isReferee).sort((a,b) => (sc[b.id]||0)-(sc[a.id]||0)).forEach(p => {
       const div = document.createElement('div');
       div.className = 'p-2 bg-gray-50 rounded-lg flex justify-between items-center';
       let badge = p.id === currentDrawerId ? '<span class="text-xs bg-purple-100 text-purple-700 px-2 py-1 rounded ml-2">画手</span>' : '';
@@ -621,6 +644,12 @@
       const div = document.createElement('div');
       div.className = 'p-2 bg-gray-100 rounded-lg flex justify-between items-center text-sm text-gray-600';
       div.innerHTML = `<span>${p.name}</span><span class="text-xs bg-gray-200 px-1 rounded">观众</span>`;
+      playerScores.appendChild(div);
+    });
+    plist.filter(p => p.isReferee).forEach(p => {
+      const div = document.createElement('div');
+      div.className = 'p-2 bg-orange-50 rounded-lg flex justify-between items-center text-sm text-orange-700';
+      div.innerHTML = `<span>${p.name}</span><span class="text-xs bg-orange-200 px-1 rounded">裁判</span>`;
       playerScores.appendChild(div);
     });
   }
@@ -639,7 +668,6 @@
     showLobby();
   }
 
-  // 房间列表渲染
   function renderRoomList(rooms) {
     roomListContainer.innerHTML = '';
     if (!rooms.length) {
@@ -654,6 +682,7 @@
           <span class="font-medium">${r.name}</span><span class="text-xs text-gray-500 ml-2">(${r.id})</span>
           <span class="ml-4 text-sm">👥 ${r.playerCount}/${MAX_PLAYERS}</span>
           <span class="ml-2 text-sm">👁️ ${r.spectatorCount}</span>
+          ${r.refereeCount ? `<span class="ml-2 text-sm">⚖️ ${r.refereeCount}</span>` : ''}
           <span class="ml-2 text-xs ${r.gameState!=='waiting'?'text-red-500':'text-green-500'}">${r.gameState==='waiting'?'等待中':'游戏中'}</span>
         </div>
         <button class="px-4 py-1 bg-blue-500 text-white rounded btn-hover join-room-btn" data-roomid="${r.id}">加入</button>
@@ -663,7 +692,6 @@
     document.querySelectorAll('.join-room-btn').forEach(btn => btn.addEventListener('click', e => joinRoom(e.target.dataset.roomid)));
   }
 
-  // ========== 事件绑定 ==========
   confirmNicknameBtn.addEventListener('click', () => {
     const name = nicknameInput.value.trim();
     if (name) { myName = name; showLobby(); } else alert('请输入昵称');
@@ -707,56 +735,73 @@
   });
   cancelRenameBtn.addEventListener('click', () => { renameModal.classList.add('hidden'); showLobby(); });
 
-  // 房间事件
   socket.on('roomJoined', data => {
-    myId = data.player.id; isHost = data.isHost; isSpectator = data.player.isSpectator; players = data.players;
+    myId = data.player.id;
+    isHost = data.isHost;
+    players = data.players;
+    updateMyStateFromPlayers(data.players);
     roomTitle.textContent = data.roomName || '房间: ' + data.roomId;
     roomIdDisplay.textContent = data.roomId; currentRoomId = data.roomId;
-    if (data.reconnectToken) {
-      saveReconnectSession({ roomId: data.roomId, playerId: data.player.id, reconnectToken: data.reconnectToken });
-    }
+    if (data.reconnectToken) saveReconnectSession({ roomId: data.roomId, playerId: data.player.id, reconnectToken: data.reconnectToken });
     waitingStatus.textContent = '等待房主开始游戏...';
     updatePlayerListWaiting(data);
   });
 
-  socket.on('reconnectInfo', data => {
-    saveReconnectSession(data);
+  socket.on('reconnectInfo', data => saveReconnectSession(data));
+
+  socket.on('stateUpdate', data => {
+    myId = data.playerId || socket.id;
+    currentRoomId = data.roomId;
+    isHost = data.isHost;
+    players = data.players || [];
+    updateMyStateFromPlayers(players);
   });
 
   socket.on('playerJoined', data => {
-    if (data.player.id === socket.id) { myId = data.player.id; isSpectator = false; }
     players = data.players;
     if (!waitingScreen.classList.contains('hidden')) updatePlayerListWaiting(data);
   });
   socket.on('spectatorJoined', data => {
-    if (data.player.id === socket.id) { myId = data.player.id; isSpectator = true; }
     players = data.players;
     if (!waitingScreen.classList.contains('hidden')) updatePlayerListWaiting(data);
   });
+
   socket.on('playerDisconnected', data => updatePlayerListWaiting({players: data.players, hostId: data.hostId}));
   socket.on('playerLeft', data => updatePlayerListWaiting({players: data.players, hostId: data.hostId}));
   socket.on('playerReconnected', data => {
     players = data.players;
     scores = data.scores;
-    if (data.isCurrentDrawer && currentDrawerId === data.oldId) {
-      currentDrawerId = data.newPlayer.id;
-    }
+    if (data.isCurrentDrawer && currentDrawerId === data.oldId) currentDrawerId = data.newPlayer.id;
     if (!waitingScreen.classList.contains('hidden')) updatePlayerListWaiting({players: data.players, hostId: data.hostId});
     if (!gameScreen.classList.contains('hidden')) updateScoreList(data.scores, data.players);
   });
   socket.on('playerSwitched', data => {
-    const idx = players.findIndex(p => p.id === data.player.id);
-    if (idx !== -1) players[idx] = data.player;
-    if (data.player.id === myId) {
-      isSpectator = !data.isNowPlayer;
-      if (!endScreen.classList.contains('hidden')) showWaiting(currentRoomId, '');
-    }
+    players = data.players;
+    updateMyStateFromPlayers(data.players);
+    if (!endScreen.classList.contains('hidden') && !gameInProgress) showWaiting(currentRoomId, '');
     if (!waitingScreen.classList.contains('hidden')) updatePlayerListWaiting({players: data.players, hostId: data.hostId});
+    if (!gameScreen.classList.contains('hidden')) updateScoreList(scores, players);
+    updateForceEndBtn();
+    forceEndTurnBtn.classList.toggle('hidden', !isReferee || !gameInProgress);
   });
 
   startGameBtn.addEventListener('click', () => socket.emit('startGame'));
   leaveRoomBtn.addEventListener('click', leaveCurrentRoom);
-  toggleRoleBtn.addEventListener('click', () => socket.emit(isSpectator ? 'switchToPlayer' : 'switchToSpectator'));
+
+  toggleRoleBtn.addEventListener('click', () => {
+    if (isReferee || isSpectator) {
+      socket.emit('switchToPlayer');
+    } else {
+      socket.emit('switchToSpectator');
+    }
+  });
+  toggleRefereeBtn.addEventListener('click', () => {
+    if (isReferee) {
+      socket.emit('switchToPlayer');
+    } else {
+      socket.emit('switchToReferee');
+    }
+  });
 
   const autoSaveSettings = debounce(() => {
     if (isHost && !isSpectator) {
@@ -767,21 +812,16 @@
       });
     }
   }, 500);
-  
   drawTimeInput.addEventListener('input', autoSaveSettings);
   selectTimeInput.addEventListener('input', autoSaveSettings);
   roundsInput.addEventListener('input', autoSaveSettings);
 
-  // ========== 导入词库 (支持 TXT 和 Excel) ==========
   wordFileInput.addEventListener('change', e => {
     const file = e.target.files[0];
     if (!file || !isHost || isSpectator) return;
-
     const fileName = file.name.toLowerCase();
     const isExcel = fileName.endsWith('.xlsx') || fileName.endsWith('.xls');
-
     if (isExcel) {
-      // 处理 Excel 文件
       const reader = new FileReader();
       reader.onload = ev => {
         try {
@@ -789,73 +829,63 @@
           const workbook = XLSX.read(data, { type: 'array' });
           const firstSheet = workbook.SheetNames[0];
           const sheet = workbook.Sheets[firstSheet];
-          // 将 sheet 转为二维数组，header:1 表示不将第一行作为键
           const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' });
-          
           const words = [];
           rows.forEach(row => {
             if (!Array.isArray(row) || row.length === 0) return;
-            // 第一列是主词，后面都是别名
             const mainWord = String(row[0] || '').trim();
-            if (!mainWord) return; // 跳过空行
+            if (!mainWord) return;
             const aliases = row.slice(1).map(cell => String(cell || '').trim()).filter(a => a);
-            // 拼接成 "主词/别名1/别名2" 格式
             const wordEntry = aliases.length > 0 ? `${mainWord}/${aliases.join('/')}` : mainWord;
             words.push(wordEntry);
           });
-
           if (words.length > 0) {
             socket.emit('updateWordList', words);
             wordCountText.textContent = `自定义词库 (Excel): ${words.length}词`;
-          } else {
-            alert('Excel 文件中没有有效词条');
-          }
+          } else alert('Excel 文件中没有有效词条');
         } catch (err) {
           console.error(err);
-          alert('Excel 文件解析失败，请检查格式');
+          alert('Excel 文件解析失败');
         }
       };
       reader.readAsArrayBuffer(file);
     } else {
-      // 原有 TXT 处理逻辑 (逗号分隔)
       const reader = new FileReader();
       reader.onload = ev => {
         const words = ev.target.result.split(',').map(w => w.trim()).filter(w => w);
         if (words.length) {
           socket.emit('updateWordList', words);
           wordCountText.textContent = `自定义词库 (TXT): ${words.length}词`;
-        } else {
-          alert('词库文件格式错误');
-        }
+        } else alert('词库文件格式错误');
       };
       reader.readAsText(file, 'utf-8');
     }
   });
 
   socket.on('wordListUpdated', data => {
-    // 保留服务端确认消息，但不覆盖已有的文案
-    if (!wordCountText.textContent.includes('自定义词库')) {
-      wordCountText.textContent = `自定义词库：${data.count}词`;
-    }
+    if (!wordCountText.textContent.includes('自定义词库')) wordCountText.textContent = `自定义词库：${data.count}词`;
   });
 
-  // ========== 游戏事件 ==========
   socket.on('gameStarted', data => {
     gameInProgress = true; showGame();
     players = data.players; isHost = (data.hostId === myId); scores = data.scores;
+    updateMyStateFromPlayers(data.players);
     updateScoreList(data.scores, data.players); chat.innerHTML = '';
     addChatMessage({name:'系统', message:'游戏开始！', isSystem:true});
     resetToolsToPen(); setDrawerToolsEnabled(false);
     updateForceEndBtn();
+    forceEndTurnBtn.classList.add('hidden');
   });
 
   socket.on('gameRestarted', data => {
     gameInProgress = false; showWaiting(data.roomId || currentRoomId, '');
     players = data.players; isHost = (data.hostId === myId);
+    updateMyStateFromPlayers(data.players);
     updatePlayerListWaiting({players: data.players, hostId: data.hostId});
     chat.innerHTML = ''; ctx.clearRect(0,0,canvas.width,canvas.height); localCanvasHistory = [];
     setDrawerToolsEnabled(false);
     updateForceEndBtn();
+    forceEndTurnBtn.classList.add('hidden');
   });
 
   socket.on('wordSelectionStart', data => {
@@ -864,9 +894,9 @@
     currentDrawerId = data.drawerId; currentDrawer.textContent = data.drawerName;
     currentRound.textContent = data.round; totalRounds.textContent = data.totalRounds;
     timer.textContent = data.currentTimer; ctx.clearRect(0,0,canvas.width,canvas.height);
-    wordSelectionModal.classList.add('hidden');
     localCanvasHistory = []; setDrawerToolsEnabled(false);
     updateScoreList(scores, players);
+    forceEndTurnBtn.classList.add('hidden');
   });
 
   socket.on('wordOptions', words => {
@@ -875,39 +905,52 @@
     words.forEach(item => {
       const btn = document.createElement('button');
       btn.className = 'word-btn p-4 bg-gradient-to-r from-blue-500 to-purple-500 text-white font-medium rounded-xl text-lg';
-      btn.textContent = item.display;          // 只显示主词
-      btn.onclick = () => { socket.emit('selectWord', item.full); wordSelectionModal.classList.add('hidden'); };
+      btn.textContent = item.display;
+      btn.onclick = () => { socket.emit('selectWord', item.full); };
       wordOptions.appendChild(btn);
     });
     wordSelectionModal.classList.remove('hidden');
   });
 
   socket.on('roundStart', data => {
-    if (!gameInProgress) return;
+    wordSelectionModal.classList.add('hidden');
+    if (!gameInProgress) {
+      gameInProgress = true;
+      showGame();
+    }
     if (gameScreen.classList.contains('hidden')) showGame();
     currentDrawerId = data.drawerId; currentDrawer.textContent = data.drawerName;
     currentRound.textContent = data.round; totalRounds.textContent = data.totalRounds;
     timer.textContent = data.currentTimer;
     isDrawer = (myId === data.drawerId);
+    isReferee = data.isReferee || false;
+
     if (isDrawer) {
+      isSpectator = false;
+      isReferee = false;
       wordDisplay.textContent = `你要画: ${data.word}`;
       wordDisplay.className = 'mt-3 text-xl font-medium text-center text-green-600';
-      setDrawerToolsEnabled(true);
-      resetToolsToPen();
-      // 画手可以发言
-      chatInput.disabled = false;
-      chatInput.placeholder = '画手可以发言...';
+      setDrawerToolsEnabled(true); resetToolsToPen();
+      chatInput.disabled = false; chatInput.placeholder = '画手可以发言...';
+      localCanvasHistory = data.canvasHistory || [];
+      redrawCanvasFromHistory(localCanvasHistory);
+    } else if (isReferee) {
+      wordDisplay.textContent = `(裁判视角) 词语: ${data.word}`;
+      wordDisplay.className = 'mt-3 text-xl font-medium text-center text-orange-600';
+      setDrawerToolsEnabled(false);
+      chatInput.disabled = false; chatInput.placeholder = '裁判消息...';
       localCanvasHistory = data.canvasHistory || [];
       redrawCanvasFromHistory(localCanvasHistory);
     } else {
       setDrawerToolsEnabled(false);
       chatInput.disabled = false;
+      const lengthHint = data.wordLength ? ` (${data.wordLength}个字)` : '';
       if (isSpectator) {
-        wordDisplay.textContent = `正在观战`;
+        wordDisplay.textContent = `正在观战${lengthHint}`;
         wordDisplay.className = 'mt-3 text-xl font-medium text-center text-gray-500';
         chatInput.placeholder = '发送消息（仅观众可见）...';
       } else {
-        wordDisplay.textContent = `请猜词语`;
+        wordDisplay.textContent = `请猜词语${lengthHint}`;
         wordDisplay.className = 'mt-3 text-xl font-medium text-center text-gray-700';
         chatInput.placeholder = '输入你猜的答案...';
       }
@@ -916,30 +959,26 @@
     }
     updateScoreList(scores, players);
     updateForceEndBtn();
+    forceEndTurnBtn.classList.toggle('hidden', !isReferee || !gameInProgress);
   });
 
   socket.on('timerUpdate', time => { timer.textContent = time; if (wordSelectTimer) wordSelectTimer.textContent = time; });
 
-  // 绘制事件
   socket.on('draw', (data) => {
     localCanvasHistory.push({ type: 'draw', data });
     ctx.beginPath(); ctx.moveTo(data.lastX, data.lastY); ctx.lineTo(data.x, data.y);
     ctx.strokeStyle = data.color; ctx.lineWidth = data.lineWidth || 3; ctx.lineCap = 'round'; ctx.stroke();
   });
-
   socket.on('fill', (data) => {
     localCanvasHistory.push({ type: 'fill', data });
     floodFill(ctx, data.x, data.y, data.color);
   });
-
   socket.on('startStroke', () => { localCanvasHistory.push({ type: 'startStroke' }); });
   socket.on('endStroke', () => { localCanvasHistory.push({ type: 'endStroke' }); });
-
   socket.on('canvasHistoryUpdated', (history) => {
     localCanvasHistory = history;
     redrawCanvasFromHistory(history);
   });
-
   socket.on('clearCanvas', () => {
     localCanvasHistory = [];
     ctx.clearRect(0, 0, canvas.width, canvas.height);
@@ -949,11 +988,13 @@
   socket.on('chat', addChatMessage);
 
   socket.on('turnEnd', data => {
-    wordDisplay.textContent = `本轮结束！正确答案是: ${data.word}`;
-    wordDisplay.className = 'mt-3 text-xl font-medium text-center text-blue-600';
+    wordDisplay.textContent = data.penalized ? `本轮被裁判强制结束！正确答案: ${data.word}` : `本轮结束！正确答案是: ${data.word}`;
+    wordDisplay.className = `mt-3 text-xl font-medium text-center ${data.penalized ? 'text-red-600' : 'text-blue-600'}`;
     isDrawer = false; setDrawerToolsEnabled(false); chatInput.disabled = false;
     scores = data.scores; updateScoreList(data.scores, players);
-    addChatMessage({name:'系统', message:`回合结束，正确答案是【${data.word}】`, isSystem:true});
+    addChatMessage({name:'系统', message: data.penalized ? `裁判强制结束，本回合分数无效。正确答案【${data.word}】` : `回合结束，正确答案是【${data.word}】`, isSystem:true});
+    forceEndTurnBtn.classList.add('hidden');
+    updateForceEndBtn();
   });
 
   socket.on('gameEnd', data => {
@@ -975,29 +1016,51 @@
       });
     } else spectatorRankingsContainer.classList.add('hidden');
     updateForceEndBtn();
+    forceEndTurnBtn.classList.add('hidden');
   });
 
   socket.on('gameInProgress', data => {
+    myId = data.playerId || socket.id;
     gameInProgress = true;
     isSpectator = data.isSpectator !== undefined ? data.isSpectator : true;
+    isReferee = data.isReferee || false;
     showGame();
     currentDrawerId = data.currentDrawerId || ''; currentDrawer.textContent = data.currentDrawer || '';
     currentRound.textContent = data.currentRound || 1; totalRounds.textContent = data.totalRounds || 3;
     timer.textContent = data.currentTimer || 60;
     if (data.canvasHistory) { localCanvasHistory = data.canvasHistory; redrawCanvasFromHistory(data.canvasHistory); }
     updateScoreList(scores, players);
-    if (isSpectator) {
-      wordDisplay.textContent = `正在观战`;
+    const lengthHint = data.wordLength ? ` (${data.wordLength}个字)` : '';
+    if (data.isDrawer) {
+      isSpectator = false; isReferee = false;
+      wordDisplay.textContent = `你要画: ${data.currentWord || ''}`;
+      wordDisplay.className = 'mt-3 text-xl font-medium text-center text-green-600';
+      setDrawerToolsEnabled(true);
+    } else if (isReferee) {
+      wordDisplay.textContent = `(裁判视角) 词语: ${data.currentWord || ''}`;
+      wordDisplay.className = 'mt-3 text-xl font-medium text-center text-orange-600';
+      setDrawerToolsEnabled(false);
+      chatInput.placeholder = '裁判消息...';
+    } else if (isSpectator) {
+      wordDisplay.textContent = `正在观战${lengthHint}`;
       wordDisplay.className = 'mt-3 text-xl font-medium text-center text-gray-500';
       chatInput.placeholder = '发送消息（仅观众可见）...';
+      setDrawerToolsEnabled(false);
+    } else {
+      wordDisplay.textContent = `请猜词语${lengthHint}`;
+      wordDisplay.className = 'mt-3 text-xl font-medium text-center text-gray-700';
+      chatInput.placeholder = '输入你猜的答案...';
+      setDrawerToolsEnabled(false);
     }
-    setDrawerToolsEnabled(false);
     updateForceEndBtn();
+    forceEndTurnBtn.classList.toggle('hidden', !isReferee);
   });
 
   socket.on('reconnectSuccess', data => {
-    myId = data.player.id; myName = data.player.name; isHost = data.isHost; isSpectator = data.isSpectator;
-    players = data.players; scores = data.scores; currentRoomId = data.roomId; isDrawer = !!data.isDrawer;
+    myId = data.player.id; myName = data.player.name; isHost = data.isHost;
+    isSpectator = data.isSpectator;
+    isReferee = data.isReferee || false; isDrawer = !!data.isDrawer;
+    players = data.players; scores = data.scores; currentRoomId = data.roomId;
     saveReconnectSession({ roomId: data.roomId, playerId: data.player.id, reconnectToken: data.reconnectToken });
     if (data.gameState === 'waiting') showWaiting(data.roomId, '');
     else if (data.gameState === 'finished') showEndScreen();
@@ -1006,20 +1069,33 @@
       localCanvasHistory = data.canvasHistory || []; redrawCanvasFromHistory(localCanvasHistory);
       currentDrawerId = data.currentDrawerId; currentDrawer.textContent = data.currentDrawer || '';
       updateScoreList(scores, players); updateForceEndBtn();
+      const lengthHint = data.wordLength ? ` (${data.wordLength}个字)` : '';
       if (isDrawer) {
+        isSpectator = false; isReferee = false;
         wordDisplay.textContent = `你要画: ${data.currentWord || ''}`;
         wordDisplay.className = 'mt-3 text-xl font-medium text-center text-green-600';
-        chatInput.disabled = false;
-        chatInput.placeholder = '画手可以发言...';
-        setDrawerToolsEnabled(true);
-        resetToolsToPen();
+        chatInput.disabled = false; chatInput.placeholder = '画手可以发言（请但不要透露答案）...';
+        setDrawerToolsEnabled(true); resetToolsToPen();
+      } else if (isReferee) {
+        wordDisplay.textContent = `(裁判视角) 词语: ${data.currentWord || ''}`;
+        wordDisplay.className = 'mt-3 text-xl font-medium text-center text-orange-600';
+        setDrawerToolsEnabled(false);
+        chatInput.placeholder = '裁判消息...';
+      } else if (isSpectator) {
+        wordDisplay.textContent = `正在观战${lengthHint}`;
+        wordDisplay.className = 'mt-3 text-xl font-medium text-center text-gray-500';
+        chatInput.placeholder = '发送消息（仅观众可见）...';
+        setDrawerToolsEnabled(false);
+      } else {
+        wordDisplay.textContent = `请猜词语${lengthHint}`;
+        wordDisplay.className = 'mt-3 text-xl font-medium text-center text-gray-700';
+        chatInput.placeholder = '输入你猜的答案...';
+        setDrawerToolsEnabled(false);
       }
-      else setDrawerToolsEnabled(false);
+      forceEndTurnBtn.classList.toggle('hidden', !isReferee);
     }
   });
-  socket.on('reconnectFailed', () => {
-    clearReconnectSession();
-  });
+  socket.on('reconnectFailed', () => clearReconnectSession());
   socket.on('connect', () => {
     const savedSession = loadReconnectSession();
     if (savedSession.roomId && savedSession.playerId && savedSession.reconnectToken) {
@@ -1027,7 +1103,12 @@
     }
   });
 
-  // ========== 画布交互 ==========
+  forceEndTurnBtn.addEventListener('click', () => {
+    if (isReferee && confirm('确认强制结束当前回合？本回合所有分数将无效并扣除。')) {
+      socket.emit('forceEndTurn');
+    }
+  });
+
   function getCanvasCoords(e) {
     const rect = canvas.getBoundingClientRect();
     const scaleX = canvas.width / rect.width;
@@ -1048,7 +1129,6 @@
     } else {
       isDrawing = true;
       [lastX, lastY] = getCanvasCoords(e);
-      // 发送一笔开始的标记
       socket.emit('startStroke');
     }
   }
@@ -1078,53 +1158,40 @@
   canvas.addEventListener('mousemove', handleDrawMove);
   canvas.addEventListener('mouseup', handleDrawEnd);
   canvas.addEventListener('mouseout', handleDrawEnd);
-
   canvas.addEventListener('touchstart', e => { e.preventDefault(); handleDrawStart(e); });
   canvas.addEventListener('touchmove', e => { e.preventDefault(); handleDrawMove(e); });
   canvas.addEventListener('touchend', e => { e.preventDefault(); handleDrawEnd(e); });
 
-  // 工具按钮事件
   penBtn.addEventListener('click', () => {
     if (!isDrawer || isSpectator) return;
     currentTool = 'pen'; isEraser = false; isFillMode = false;
-    penBtn.classList.add('btn-active');
-    eraserBtn.classList.remove('btn-active');
-    fillBtn.classList.remove('btn-active');
+    penBtn.classList.add('btn-active'); eraserBtn.classList.remove('btn-active'); fillBtn.classList.remove('btn-active');
     canvas.style.cursor = '';
   });
-
   eraserBtn.addEventListener('click', () => {
     if (!isDrawer || isSpectator) return;
     currentTool = 'eraser'; isEraser = true; isFillMode = false;
-    eraserBtn.classList.add('btn-active');
-    penBtn.classList.remove('btn-active');
-    fillBtn.classList.remove('btn-active');
+    eraserBtn.classList.add('btn-active'); penBtn.classList.remove('btn-active'); fillBtn.classList.remove('btn-active');
     canvas.style.cursor = '';
   });
-
   fillBtn.addEventListener('click', () => {
     if (!isDrawer || isSpectator) return;
     if (currentTool === 'fill') {
       currentTool = 'pen'; isFillMode = false; isEraser = false;
-      fillBtn.classList.remove('btn-active');
-      penBtn.classList.add('btn-active');
+      fillBtn.classList.remove('btn-active'); penBtn.classList.add('btn-active');
       canvas.style.cursor = '';
     } else {
       currentTool = 'fill'; isFillMode = true; isEraser = false;
-      fillBtn.classList.add('btn-active');
-      penBtn.classList.remove('btn-active');
-      eraserBtn.classList.remove('btn-active');
+      fillBtn.classList.add('btn-active'); penBtn.classList.remove('btn-active'); eraserBtn.classList.remove('btn-active');
       canvas.style.cursor = 'crosshair';
     }
   });
-
   clearBtn.addEventListener('click', () => {
     if (!isDrawer || isSpectator) return;
     ctx.clearRect(0,0,canvas.width,canvas.height);
     localCanvasHistory = [];
     socket.emit('clearCanvas');
   });
-
   undoBtn.addEventListener('click', () => {
     if (!isDrawer || isSpectator) return;
     socket.emit('undo');
@@ -1136,14 +1203,8 @@
       setCurrentColor(btn.dataset.color);
     });
   });
-  colorPicker.addEventListener('input', e => {
-    if (!isDrawer || isSpectator) return;
-    setCurrentColor(e.target.value);
-  });
-  colorPicker.addEventListener('change', e => {
-    if (!isDrawer || isSpectator) return;
-    setCurrentColor(e.target.value);
-  });
+  colorPicker.addEventListener('input', e => { if (isDrawer && !isSpectator) setCurrentColor(e.target.value); });
+  colorPicker.addEventListener('change', e => { if (isDrawer && !isSpectator) setCurrentColor(e.target.value); });
   brushSize.addEventListener('input', e => brushSizeValue.textContent = e.target.value);
   eraserSize.addEventListener('input', e => eraserSizeValue.textContent = e.target.value);
 
@@ -1153,6 +1214,7 @@
 
   forceEndBtn.addEventListener('click', () => { if (isHost && confirm('确认强制结束游戏？')) socket.emit('forceEndGame'); });
 
+  // 修复：允许裁判房主重置房间
   playAgainBtn.addEventListener('click', () => {
     if (isHost && !isSpectator) socket.emit('restartGame');
     else showWaiting(currentRoomId, '');
